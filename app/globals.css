@@ -1,0 +1,119 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --muted: #6b7280;
+  --border: #e5e7eb;
+  --accent: #0d3998;
+  --code-bg: #f6f8fa;
+}
+
+.dark {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #8b949e;
+  --border: #21262d;
+  --accent: #6197d4;
+  --code-bg: #161b22;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+}
+
+/* Heading anchors land below the sticky header. */
+:target {
+  scroll-margin-top: 5rem;
+}
+
+/* Inline code (rehype-pretty-code leaves fenced blocks with data-rehype-pretty-code-figure). */
+.prose :not(pre) > code {
+  background: var(--code-bg);
+  padding: 0.15em 0.35em;
+  border-radius: 0.3em;
+  font-size: 0.875em;
+  font-weight: 500;
+}
+.prose :not(pre) > code::before,
+.prose :not(pre) > code::after {
+  content: none;
+}
+
+/* Fenced code blocks from rehype-pretty-code / Shiki. */
+.prose pre {
+  background: var(--code-bg) !important;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  padding: 1rem 1.1rem;
+  overflow-x: auto;
+  font-size: 0.875rem;
+  line-height: 1.6;
+}
+.prose pre code {
+  background: transparent;
+  padding: 0;
+  font-size: inherit;
+  counter-reset: line;
+  /* Readable base for fenced blocks with no language (Shiki leaves them
+     untokenized); highlighted blocks override this per-token below. */
+  color: var(--fg);
+}
+
+/* Copy button injected onto each code block by ChapterContent. */
+.code-copy-btn {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.5rem;
+  padding: 0.25rem 0.55rem;
+  font-size: 0.75rem;
+  font-weight: 500;
+  line-height: 1;
+  border-radius: 0.375rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.prose pre:hover .code-copy-btn,
+.code-copy-btn:focus-visible {
+  opacity: 1;
+}
+.code-copy-btn:hover {
+  color: var(--fg);
+  border-color: var(--muted);
+}
+.code-copy-btn.is-copied {
+  color: var(--accent);
+  border-color: var(--accent);
+  opacity: 1;
+}
+/* On touch devices there is no hover; keep the button visible. */
+@media (hover: none) {
+  .code-copy-btn {
+    opacity: 1;
+  }
+}
+
+/* Two-theme support: show the right Shiki theme per color mode. */
+html:not(.dark) pre code span {
+  color: var(--shiki-light);
+}
+html.dark pre code span {
+  color: var(--shiki-dark);
+}
+html:not(.dark) [data-rehype-pretty-code-figure] pre {
+  background-color: var(--shiki-light-bg) !important;
+}
+html.dark [data-rehype-pretty-code-figure] pre {
+  background-color: var(--shiki-dark-bg) !important;
+}

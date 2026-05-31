@@ -1,14 +1,43 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { NANOBOT_BLOB_PREFIX } from "@/lib/nanobot";
+import { useSourcePane } from "./SourcePaneProvider";
 
 /**
  * Renders the build-time-rendered chapter HTML and, after mount, adds a
  * "Copy" button to every code block. Buttons are injected client-side because
  * the markup comes from a static HTML string (dangerouslySetInnerHTML).
+ *
+ * It also intercepts clicks on nanobot source links so they open the in-app
+ * source pane (on wide screens) instead of navigating away.
  */
 export default function ChapterContent({ html }: { html: string }) {
   const ref = useRef<HTMLDivElement>(null);
+  const { openSource } = useSourcePane();
+
+  // Intercept nanobot blob-link clicks → open the source pane.
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+
+    function onClick(e: MouseEvent) {
+      // Let modified clicks (new tab/window) and non-primary buttons through.
+      if (e.defaultPrevented || e.button !== 0) return;
+      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      // No room to split on narrow screens — let it open GitHub in a new tab.
+      if (!window.matchMedia("(min-width: 768px)").matches) return;
+
+      const link = (e.target as HTMLElement).closest("a");
+      const href = link?.getAttribute("href");
+      if (!href || !href.startsWith(NANOBOT_BLOB_PREFIX)) return;
+
+      if (openSource(href)) e.preventDefault();
+    }
+
+    root.addEventListener("click", onClick);
+    return () => root.removeEventListener("click", onClick);
+  }, [openSource]);
 
   useEffect(() => {
     const root = ref.current;

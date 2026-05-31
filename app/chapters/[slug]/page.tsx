@@ -4,6 +4,8 @@ import Sidebar from "@/components/Sidebar";
 import PrevNext from "@/components/PrevNext";
 import Comments from "@/components/Comments";
 import ChapterContent from "@/components/ChapterContent";
+import SourcePaneProvider from "@/components/SourcePaneProvider";
+import ReaderWithPane from "@/components/ReaderWithPane";
 import {
   CHAPTERS,
   getChapterBySlug,
@@ -40,28 +42,30 @@ export default async function ChapterPage({
   const { prev, next } = getChapterNeighbors(slug);
 
   return (
-    <div className="md:flex">
-      <Sidebar />
-      <main className="min-w-0 flex-1">
-        <article className="mx-auto max-w-3xl px-5 py-10 md:px-8 md:py-16">
-          <header className="mb-10">
-            <p
-              className="text-sm font-semibold uppercase tracking-wide"
-              style={{ color: "var(--muted)" }}
-            >
-              Chapter {number}
-            </p>
-            <h1 className="mt-2 text-3xl font-bold tracking-tight md:text-4xl">
-              {chapter.title}
-            </h1>
-          </header>
+    <SourcePaneProvider>
+      <div className="md:flex">
+        <Sidebar />
+        <ReaderWithPane>
+          <article className="mx-auto max-w-3xl px-5 py-10 md:px-8 md:py-16">
+            <header className="mb-10">
+              <p
+                className="text-sm font-semibold uppercase tracking-wide"
+                style={{ color: "var(--muted)" }}
+              >
+                Chapter {number}
+              </p>
+              <h1 className="mt-2 text-3xl font-bold tracking-tight md:text-4xl">
+                {chapter.title}
+              </h1>
+            </header>
 
-          <ChapterContent html={html} />
+            <ChapterContent html={html} />
 
-          <PrevNext prev={prev} next={next} />
-          <Comments chapterTitle={`Chapter ${number}: ${chapter.title}`} />
-        </article>
-      </main>
-    </div>
+            <PrevNext prev={prev} next={next} />
+            <Comments chapterTitle={`Chapter ${number}: ${chapter.title}`} />
+          </article>
+        </ReaderWithPane>
+      </div>
+    </SourcePaneProvider>
   );
 }

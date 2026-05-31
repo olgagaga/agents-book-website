@@ -5,6 +5,7 @@ import remarkRehype from "remark-rehype";
 import rehypeSlug from "rehype-slug";
 import rehypePrettyCode from "rehype-pretty-code";
 import rehypeStringify from "rehype-stringify";
+import rehypeReferences from "./rehype-references";
 
 /**
  * Render chapter markdown to an HTML string at build time. Code blocks are
@@ -21,6 +22,7 @@ export async function renderMarkdown(markdown: string): Promise<string> {
       theme: { light: "github-light", dark: "github-dark" },
       keepBackground: false,
     })
+    .use(rehypeReferences)
     .use(rehypeStringify)
     .process(markdown);
 

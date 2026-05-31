@@ -1,4 +1,5 @@
 import Link from "next/link";
+import Image from "next/image";
 import type { Metadata } from "next";
 import ThemeToggle from "@/components/ThemeToggle";
 
@@ -26,33 +27,52 @@ export default function About() {
       </div>
 
       <div className="prose prose-neutral max-w-none dark:prose-invert">
+        <Image
+          src="/author.jpg"
+          alt="Olga Kuzmich"
+          width={220}
+          height={293}
+          priority
+          className="float-none mx-auto mb-6 h-auto w-44 rounded-2xl object-cover shadow-sm sm:float-right sm:mb-4 sm:ml-6 sm:mt-0 sm:w-52"
+        />
+
         <p>
-          <strong>Olga Kuzmich</strong> is a computer science student at Johns
-          Hopkins University and a builder of AI systems across education,
-          healthcare, and synthetic biology. She wrote this book because it is
-          the one she wished existed when she set out to understand how AI agents
-          actually work — past the demos, down to the loop, the tools, and the
-          plain Python that holds it all together.
+          <strong>Olga Kuzmich</strong> is pursuing a combined BS/MS program at
+          Johns Hopkins University in Applied Mathematics and Data Science. She
+          wrote this book because it is the one she wished existed when she set
+          out to understand how AI agents actually work.
         </p>
 
         <p>
-          Her hands-on work with agents includes <em>Sorify</em>, a Telegram AI
-          voice agent she built and runs, and her role as CTO of QOS Education.
-          She founded the <em>“What are you good at, JHU?”</em> podcast, has led
-          teams in Hopkins iGEM and the Synthetic Biology Society, and currently
-          works at Dwellwell. Her research spans clinical predictive modeling and
+          Her hands-on work with agents includes contributing to nanobot — a
+          lightweight personal AI agent that serves as a reference codebase in
+          this book. She currently works at Dwellwell Analytics Inc. as a Data
+          Science Engineering Intern, merging AI, hardware, and software to
+          transform ordinary houses into data-driven, self-diagnosing
+          environments. She writes about her experience as an early-career CS
+          professional on her Medium blog,{" "}
+          <a
+            href="https://medium.com/@okuzmich2005"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            @okuzmich2005
+          </a>
+          . Her previous research spans clinical predictive modeling and
           computer vision, with work appearing in venues including{" "}
-          <em>Open Forum Infectious Diseases</em> and NeurIPS.
+          <em>Open Forum Infectious Diseases</em> and <em>NeurIPS</em>.
         </p>
 
         <p>
           She is a RISE Global Winner — a Schmidt Futures and Rhodes Trust
           program that selected roughly 100 people from some 80,000 applicants —
-          and her early work has been covered by Forbes and IEEE Entrepreneurship.
-          This book grows out of a simple conviction: the engineering behind a
+          and her early work has been covered by IEEE Entrepreneurship. This
+          book grows out of a simple conviction: the engineering behind a
           capable agent is far less magical than it looks, and anyone willing to
           build it one piece at a time can understand the whole thing.
         </p>
+
+        <p>She loves oranges, cornflowers, and sparkling water.</p>
 
         <h2>Get in touch</h2>
         <p>
@@ -64,6 +84,15 @@ export default function About() {
             rel="noopener noreferrer"
           >
             book’s GitHub repository
+          </a>
+          . You can also reach Olga by email at{" "}
+          <a href="mailto:okuzmic1@jh.edu">okuzmic1@jh.edu</a> or connect on{" "}
+          <a
+            href="https://www.linkedin.com/in/olgakuzmich/"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            LinkedIn
           </a>
           .
         </p>

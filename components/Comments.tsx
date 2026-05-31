@@ -63,7 +63,7 @@ export default function Comments({ chapterTitle }: { chapterTitle: string }) {
             className="text-sm underline underline-offset-2"
             style={{ color: "var(--accent)" }}
           >
-            Found a typo? Open an issue ↗
+            Found a typo? Open an issue
           </a>
         )}
       </div>

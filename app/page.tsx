@@ -22,7 +22,7 @@ export default function Home() {
 
       <p className="text-lg leading-relaxed" style={{ color: "var(--muted)" }}>
         Build a personal AI agent from scratch in Python. Each chapter adds a single idea until you have
-        a real agent you understand top to bottom.
+        a real agent you understand top to bottom. All file links in Production references are clickable and take you to the exact line in the exact version of the reference codebase. 
       </p>
 
       <div className="mt-8 flex flex-wrap items-center gap-x-6 gap-y-3">
@@ -70,6 +70,56 @@ export default function Home() {
         <p className="mt-8 text-sm" style={{ color: "var(--muted)" }}>
           The first five chapters are published here. More are on the way.
         </p>
+      </section>
+
+      <section
+        className="mt-16 rounded-xl border p-5 md:p-6"
+        style={{ borderColor: "var(--border)", background: "var(--code-bg)" }}
+      >
+        <h2 className="text-base font-semibold">About the reference codebase</h2>
+        <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>
+          Each chapter ends with a <em>Production reference</em> that maps the toy
+          code you build to real functions in{" "}
+          <a
+            href="https://github.com/HKUDS/nanobot"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="underline underline-offset-2"
+            style={{ color: "var(--accent)" }}
+          >
+            nanobot
+          </a>
+          , an open-source personal AI agent. The book pins one specific snapshot
+          so the file and function names it cites stay accurate: commit{" "}
+          <code>28f9bbf</code> (28 Apr 2026).
+        </p>
+        <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>
+          nanobot is under active development, so if a section the book references
+          has since changed upstream, you can always read the exact version the
+          book is describing at the pinned commit:
+        </p>
+        <p className="mt-3 text-sm">
+          <a
+            href="https://github.com/HKUDS/nanobot/tree/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="break-all underline underline-offset-2"
+            style={{ color: "var(--accent)" }}
+          >
+            github.com/HKUDS/nanobot/tree/28f9bbf
+          </a>
+        </p>
+        <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>
+          To check it out locally:
+        </p>
+        <pre
+          className="mt-2 overflow-x-auto rounded-lg border p-3 text-xs leading-relaxed"
+          style={{ borderColor: "var(--border)", background: "var(--bg)" }}
+        >
+          <code>{`git clone https://github.com/HKUDS/nanobot.git
+cd nanobot
+git checkout 28f9bbf`}</code>
+        </pre>
       </section>
     </main>
   );

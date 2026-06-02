@@ -1,8 +1,6 @@
 # Chapter 3: The System Prompt and Context Builder
 
-The chatbot we built in Chapter 2 has personality, but only by accident. It is whatever Claude's default tone happens to be: friendly, somewhat formal, prone to "Great question!" preambles. We did not choose any of that.
-
-This chapter gives us the lever for choosing. We are going to introduce a third kind of message — the _system prompt_ — that sits at the very front of every conversation and shapes everything that follows. And rather than hardcoding that prompt in Python, we will build a `templates/` directory: a folder of Markdown files where the agent's identity, instructions, and background knowledge live.
+Chatbot in Chapter 2 has a default personality associated with the underlying model. In this chapter, we are going to introduce a third kind of message — the _system prompt_ — that sits at the very front of every conversation and shapes everything that follows, including the agent's personality. We will build a `templates/` directory: a folder of Markdown files where the agent's identity, instructions, and background knowledge live.
 
 By the end of this chapter, the `chat()` loop in `main.py` will load `templates/` at startup, send its contents as the system prompt on every turn, and behave noticeably differently from the same model called with no system prompt at all.
 
@@ -40,17 +38,17 @@ client.chat.completions.create(
 )
 ```
 
-The two shapes are equivalent — the model reads the same content first, treats it the same way. When we abstract over providers in Chapter 5, our `Provider` interface will accept a `system` argument and translate it to whichever shape the provider expects.
+When we abstract over providers in Chapter 5, our `Provider` interface will accept a `system` argument and translate it to whichever shape the provider expects.
 
 ## What a system prompt actually does
 
-The system prompt is not magic. It is just text that the model sees first, and which it has been trained to weight heavily. A system prompt that says "you are concise" will make the model more concise, but not absolutely so — a sufficiently chatty user, or a sufficiently complex question, can still pull the model away from the instruction. Treat the system prompt as strong steering, not a hard constraint [3].
+The system prompt is just a text that the model sees first, and which it has been trained to weight heavily. Do not treat it as a hard constraint though [3].
 
-Two consequences worth holding onto:
+As a consequence:
 
-1. **The system prompt is paid for every turn.** The model has no memory between calls, including no memory of its own system prompt. Every message we send re-includes it. A 5,000-token system prompt costs 5,000 input tokens of compute on every turn of every conversation. This becomes important when we get to prompt caching in Chapter 4.
+1. **The system prompt is paid for every turn.** because the model has no memory between calls. This becomes important when we get to prompt caching in Chapter 4.
 
-2. **The system prompt and the user message are not strictly separable in the model's mind.** A user with sufficient cleverness can sometimes get the model to ignore or contradict the system prompt — this is _prompt injection_, named by Simon Willison in September 2022 [4] after researchers at Preamble had privately reported it to OpenAI a few months earlier [5]. The most public early demonstration came in February 2023, when Bing Chat was talked into revealing its confidential system prompt and internal codename "Sydney" [6]. Chapter 26 covers it properly; for now the lesson is: do not put credentials, internal URLs, or anything else load-bearing into a system prompt and expect it to stay there.
+2. **The system prompt and the user message are not strictly separable in the model's mind.** A user with sufficient cleverness can sometimes get the model to ignore or contradict the system prompt — this is _prompt injection_, named by Simon Willison in September 2022 [4] after researchers at Preamble had privately reported it to OpenAI a few months earlier [5]. The most public early demonstration came in February 2023, when Bing Chat was talked into revealing its confidential system prompt and internal codename "Sydney" [6]. Chapter 26 covers it properly but for now the lesson is do not put credentials, internal URLs, or anything else load-bearing into a system prompt.
 
 ## A first try: hardcoding the system prompt
 
@@ -74,27 +72,27 @@ def llm(messages: list[dict]) -> str:
     return response.content[0].text
 ```
 
-Run `uv run main.py` and try a few short exchanges where the difference will be visible — anything the default Claude has strong opinions about will do. Three good probes:
+Run `uv run main.py` and try a few short exchanges where the difference will be visible. Three good ideas to start:
 
-- A casual greeting (`hey`) — without a system prompt the model will usually offer to help and add an emoji; with this prompt it should answer flat.
-- A factual one-liner (`what year did Python 3 come out?`) — without a prompt you'll often get a paragraph and a sign-off; with one you should get the year and maybe a sentence.
-- An open-ended question (`what should I read to learn Rust?`) — a clear test of "answer first, then expand."
+- A casual greeting (`hey`)
+- A factual one-liner (`what year did Python 3 come out?`)
+- An open-ended question (`what should I read to learn Rust?`) 
 
-Run each prompt twice — once with `system=SYSTEM_PROMPT` and once with `system=""` — and watch the tone collapse from helpful-and-fluffy to terse. The change is not subtle.
+Run each prompt twice — once with `system=SYSTEM_PROMPT` and once with `system=""` — and watch the tone collapse from helpful-and-fluffy to terse. 
 
-So a string constant works. The trouble is that the agent we are building is _personal_. It is going to know things about you. It is going to have skills you teach it. It is going to evolve as you use it. Editing its behaviour should not require opening a Python file and finding a triple-quoted string.
+The trouble is that the agent we are building is _personal_. It is going to know things about you and have skills you teach it. It is going to evolve as you use it. Ideally, editing this should not require opening a python file.
 
-What we want instead is a folder of plain Markdown files that the agent reads at startup — edit a file, restart the agent, and its identity has changed without any code changes.
+The better way to approach this is to have a folder of plain Markdown files that the agent reads at startup. This was, a user can just edit a file, restart the agent, and its identity will change without any code changes.
 
 It is worth noticing that this is the dominant pattern in the agent ecosystem. For example, Claude Code reads `CLAUDE.md`, Cursor reads `.cursorrules`, GitHub Copilot reads `.github/copilot-instructions.md`. The cross-tool convention that has emerged is `AGENTS.md`: Anthropic, OpenAI, and most of the tooling community are converging on this name. We will follow that convention.
 
-The convergence on a single filename is recent. Through 2024 every coding agent shipped its own bespoke instruction file — `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.continuerules`, `.windsurfrules`, and a long tail of others — leaving any cross-tool project with three or four near-duplicate files in its repo root. By August 2025, OpenAI had published `AGENTS.md` as a deliberately minimal sibling to `README.md`: same Markdown, same repo-root location, but for agents instead of humans. Within months it was supported by Codex, Cursor, Amp, Claude Code (which still also reads `CLAUDE.md`), Devin, GitHub Copilot, Gemini CLI, and Jules [7]. In December 2025 it was donated to the Linux Foundation as part of the Agentic AI Foundation, alongside Model Context Protocol [8] — at which point the convention stopped being a vendor decision and became infrastructure.
+The convergence on a single filename is recent. Through 2024 every coding agent shipped its own bespoke instruction file — `CLAUDE.md`, `.cursorrules`, `.github/copilot-instructions.md`, `.continuerules`, `.windsurfrules`, and a long tail of others, leaving any cross-tool project with three or four near-duplicate files in its repo root. By August 2025, OpenAI had published `AGENTS.md` as a deliberately minimal sibling to `README.md`: same Markdown at the root of the repository, but for agents instead of humans. Within months it was supported by Codex, Cursor, Amp, Claude Code (which still also reads `CLAUDE.md`), Devin, GitHub Copilot, Gemini CLI, and Jules [7]. In December 2025 it was donated to the Linux Foundation as part of the Agentic AI Foundation, alongside Model Context Protocol [8], at which point the convention stopped being a vendor decision and rather became infrastructure.
 
-So: `AGENTS.md` is a settled convention now, but it is also one chosen with three properties baked in, and those properties are why we are using a directory of Markdown files for the rest of our agent's templates as well.
+So `AGENTS.md` is a settled convention now with the following properties:
 
-- **It is human-editable.** You can open it in any text editor. Non-programmers can edit it.
-- **The model reads it natively.** Markdown is one of the most common formats in LLM training data; recent benchmarks show that for instruction-following on capable models like GPT-4 and Claude, Markdown-formatted prompts perform at least as well as JSON or YAML and frequently better, while consuming fewer tokens than either [9]. So Markdown is both the cheapest format we could pick and one of the formats the model handles most fluently.
-- **It composes.** Files reference each other, sections nest, and we can later split or combine pieces without changing how the agent loads them.
+- It is human-editable.
+- The model reads it natively. Markdown is one of the most common formats in LLM training data and recent benchmarks show that for instruction-following on capable models like GPT-4 and Claude, Markdown-formatted prompts perform at least as well as JSON or YAML and frequently better, while consuming fewer tokens than either [9]. So Markdown is both the cheapest format we could pick and one of the formats the model handles most fluently.
+- Files reference each other, sections nest, and we can later split or combine pieces without changing how the agent loads them.
 
 Let's add a `templates/` directory inside `agent/`, alongside `main.py`, and populate it with three files:
 
@@ -154,7 +152,7 @@ These are just examples of the shape. The reader is encouraged (Exercise 1) to t
 
 ## Building `context.py`
 
-The hardcoded `SYSTEM_PROMPT` constant from earlier got us a behavioural change in two minutes, which is good — but it has two problems that get worse as the agent grows. First, modifying it means navigating to a Python constant, which raises the bar for anyone who is not comfortable reading code. Second, as the agent grows we will want to vary the system prompt by context — different sections for different channels, on-demand skill files, injected memory — and stitching that together inside a single string constant scattered across files is the path to prompts you cannot debug. The fix is to keep all prompt content in one directory of Markdown files and use a single piece of code to assemble it.
+The hardcoded `SYSTEM_PROMPT` constant from earlier got us a behavioural change in two minutes, which is good but it has two problems that get worse as the agent grows. First, modifying it means navigating to a Python constant, which raises the bar for anyone who is not comfortable reading code. Second, as the agent grows we will want to vary the system prompt by context — different sections for different channels, on-demand skill files, injected memory — and stitching that together inside a single string constant scattered across files is the path to prompts you cannot debug. The fix is to keep all prompt content in one directory of Markdown files and use a single piece of code to assemble it.
 
 For now, our context builder is a single function: it reads every Markdown file in `templates/` and concatenates them into one string. That string becomes the system prompt for every turn of the conversation.
 
@@ -168,7 +166,7 @@ import pathlib
 TEMPLATES_DIR = pathlib.Path(__file__).parent / "templates"
 ```
 
-`__file__` is the path to `context.py` itself, so `TEMPLATES_DIR` always resolves to `<directory of context.py>/templates`. The path is anchored to the file, not to the current working directory — so it works the same whether you run `context.py` directly or import it from `main.py`.
+`__file__` is the path to `context.py` itself, so `TEMPLATES_DIR` always resolves to `<directory of context.py>/templates`. The path is anchored to the file, not to the current working directory, so it works the same whether you run `context.py` directly or import it from `main.py`.
 
 Now, create a function to walk every `.md` file in the templates directory and return an aggregated string:
 
@@ -186,25 +184,25 @@ def build_context() -> str:
 
 There are a couple of things worth noticing about our context builder:
 
-- **No file headers, no separators.** We just concatenate, with one blank line between files. The Markdown headings inside each file already partition the content visually. Adding `--- File: persona.md ---` style separators would be noise, and would also leak the directory's filesystem layout into the prompt for no benefit.
+- We just concatenate with one blank line between files. The Markdown headings inside each file already partition the content visually. Adding `--- File: persona.md ---` style separators would be noise, and would also leak the directory's filesystem layout into the prompt for no benefit.
 
-- **Missing-templates fallback.** If the `templates/` directory does not exist, `build_context` returns an empty string. The agent will run, just without a persona. This is intentional — the agent should remain functional even when its templates are missing.
+- If the `templates/` directory does not exist, `build_context` returns an empty string. The agent will run, just without a persona. This is intentional since the agent should remain functional even when its templates are missing.
 
 Now we can come back to `main.py` and wire it up. Three small edits:
 
-**1. Import `build_context` from `context.py`.** Add this at the top of `main.py`, alongside the other imports:
+Start by importing `build_context` from `context.py`. Add this at the top of `main.py`, alongside the other imports:
 
 ```python
 from context import build_context
 ```
 
-This is a regular Python `from <module> import <name>` statement — `context` is the module name (the filename `context.py` minus the extension), and `build_context` is the function we just wrote. Watch the word order: it is `from context import build_context`, not `import build_context from context`.
+This is a regular Python `from <module> import <name>` statement — `context` is the module name (the filename `context.py` minus the extension), and `build_context` is the function we just wrote. 
 
 Because `main.py` and `context.py` live in the same directory, Python finds the `context` module on its path automatically when you run `uv run main.py` from the project root.
 
-**2. Delete the hardcoded `SYSTEM_PROMPT` constant** we added earlier. It is about to be replaced by whatever `build_context()` returns.
+Now delete the hardcoded `SYSTEM_PROMPT` constant we added earlier. It is about to be replaced by whatever `build_context()` returns.
 
-**3. Add a `system` parameter to `llm()`** so the caller (the chat loop) can pass the prompt in:
+Fniallt, add a `system` parameter to `llm()` so the caller (the chat loop) can pass the prompt in:
 
 ```python
 def llm(messages: list[dict], system: str = "") -> str: # <-- system parameter added
@@ -220,7 +218,7 @@ def llm(messages: list[dict], system: str = "") -> str: # <-- system parameter a
 
 Notice that we default system prompt to an empty string. The Anthropic API treats an empty `system` parameter the same as omitting it.
 
-Finally, update `chat` to load `templates/` once at startup and pass it on every turn:
+Now we can update `chat` to load `templates/` once at startup and pass it on every turn:
 
 ```python
 def chat() -> None:
@@ -242,11 +240,11 @@ def chat() -> None:
         print(f"\nassistant: {reply}\n")
 ```
 
-Notice that `system` is built once, before the loop, and reused every turn. We are not re-reading the templates on every message. If you edit `persona.md` while the chat is running, the change will not take effect until you restart. That is a deliberate simplification — you can explore a hot-reloading variant in Exercise 5.
+Notice that `system` is built once, before the loop, and reused every turn. We are not re-reading the templates on every message. If you edit `persona.md` while the chat is running, the change will not take effect until you restart. That is a deliberate simplification but you can explore a hot-reloading variant in Exercise 5.
 
 ## Running it
 
-Run the same prompt twice — once with `templates/` in place, once after temporarily renaming the directory to `templates_off/` so `build_context` returns an empty string. The simplest probe is `hey who are you`, because the answer leaks the model's idea of itself.
+Run the same prompt twice - once with `templates/` in place, once after temporarily renaming the directory to `templates_off/` so `build_context` returns an empty string. The simplest probe is `hey who are you`, because the answer leaks the model's idea of itself.
 
 Without templates:
 
@@ -268,8 +266,7 @@ I can help with questions, tasks, coding, writing, research, and
 general problem-solving. What do you need?
 ```
 
-The model is the same in both runs, the user message is the same, and the conversation history is the same (empty). The only thing that changed is the system prompt — and with it the entire frame the model is replying from. Without templates, the model defaults to its trained-in persona: it identifies as Claude, name-checks Anthropic, drops an emoji, mirrors the user's tone, and tries to draw out further conversation. With templates, it speaks as the agent we described in `AGENTS.md` and `persona.md`: no emoji, no preamble, no upspeak, a sentence about what it is, a sentence about what it can do, and a question that moves the conversation forward instead of marking time. None of that is enforced by the API; it is all just text the model read first and chose to be consistent with. That is what the system prompt buys us, and it is also a useful reminder that the buy is statistical — a different question, a more chatty user, or a more capable jailbreak attempt could pull the persona apart. Strong steering, not a hard guarantee.
-
+The model is the same in both runs, the user message is the same, and the conversation history is the same (it is empty now). The only thing that changed is the system prompt and with it the entire frame the model is replying from. Without templates, the model defaults to its trained-in persona: it identifies as Claude, name-checks Anthropic, drops an emoji, mirrors the user's tone, and tries to draw out further conversation. With templates, it speaks as the agent we described in `AGENTS.md` and `persona.md`: no emoji, no preamble, no upspeak, a sentence about what it is, a sentence about what it can do, and a question that moves the conversation forward instead of marking time. 
 
 ## Why all-at-once is fine for now
 
@@ -281,31 +278,31 @@ We are going to ignore this until two things land:
 
 2. **Skills (Chapter 18).** A more sophisticated context layer where individual Markdown files are loaded _on demand_, only when the model decides they are relevant to the current task. Skills make a thousand-file `templates/` directory tractable. We are not there yet.
 
-Until then, plain concatenation is the right amount of complexity. The `templates/` directory will stay small (a few files), prompt caching will keep it cheap once we add it, and the simplicity is worth the wastefulness.
+Until then, plain concatenation works well. The `templates/` directory will stay small (a few files) and prompt caching will keep it cheap once we add it.
 
 ## The other half of "context"
 
-The system prompt is one half of what the model sees before it starts thinking. The other half is the conversation history — the `messages` list from Chapter 2. From the model's perspective, both arrive together, in the same call, and both shape the next reply.
+The system prompt is one half of what the model sees before it starts thinking. The other half is the conversation history, specifically, the `messages` list from Chapter 2. From the model's perspective, both arrive together, in the same call, and both shape the next reply.
 
 It is worth holding the word "context" loosely in this book. Sometimes "context" means the system prompt (this chapter). Sometimes it means the full input the model sees on a given turn (system + history + current message). Sometimes it means longer-term knowledge the agent has accumulated (Chapters 16 and 17). 
 
-For now: `build_context()` builds the _static_ part of the context — the contents of `templates/`. The conversation history is the _dynamic_ part. They will eventually meet inside `context.py` (Chapter 15 extends `build_context` to summarize old messages), but we are not splicing them yet.
+For now: `build_context()` builds the _static_ part of the context that are stored in `templates/`. The conversation history is the _dynamic_ part. They will eventually meet inside `context.py` (Chapter 15 extends `build_context` to summarize old messages), but we are not splicing them yet.
 
 
 ## Production reference
 
-In nanobot, the equivalent of our `build_context` is the [`ContextBuilder`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L16) class in [`nanobot/nanobot/agent/context.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py) — same module name, same purpose. Open the file and notice that the directory of Markdown files we built is called `templates/` there too. Inside [`nanobot/nanobot/templates/`](https://github.com/HKUDS/nanobot/tree/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates) you will find [`AGENTS.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/AGENTS.md), [`SOUL.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/SOUL.md), [`USER.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/USER.md), and [`TOOLS.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/TOOLS.md) — that is the production version of the three files we just wrote, plus two more (`SOUL.md` for the agent's deeper self-description, `TOOLS.md` for tool-use guidance). The shape is the same; nanobot just has more to say.
+In nanobot, the equivalent of our `build_context` is the [`ContextBuilder`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L16) class in [`nanobot/nanobot/agent/context.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py) — same module name, same purpose. Open the file and notice that the directory of Markdown files we built is called `templates/` there too. Inside [`nanobot/nanobot/templates/`](https://github.com/HKUDS/nanobot/tree/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates) you will find [`AGENTS.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/AGENTS.md), [`SOUL.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/SOUL.md), [`USER.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/USER.md), and [`TOOLS.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/TOOLS.md) — that is the production version of the three files we just wrote, plus two more (`SOUL.md` for the agent's deeper self-description, `TOOLS.md` for tool-use guidance).
 
-Three pieces are worth tracing once you have written your own `build_context`. Each maps to something we did (or hand-waved) in this chapter:
+As in the previous chapters, there are code chunks that are worth tracing in the `nanobot` once you have written your own `build_context`:
 
-- **[`ContextBuilder.build_system_prompt()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L31)** is the production version of our `build_context()`. Strip away the parts we have not built yet — memory, skills, recent history — and what is left is [`_load_bootstrap_files()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L109) followed by `"\n\n---\n\n".join(parts)`. That is recognisably our function. The interesting difference is that nanobot uses an explicit `---` separator between sections, not a blank line; the trade-off is that the sections are now individually addressable in the prompt and can be re-ordered or removed by index, at the cost of leaking the structural seam to the model.
-- **[`ContextBuilder._load_bootstrap_files()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L109)** is the production version of our `glob("*.md")` loop. It does *not* glob — it walks an explicit [`BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L19) list in fixed order, and prefixes each file's content with a `## <filename>` header so the model can refer to them by name. Hard-coded order beats alphabetical sort once you care which file the model reads first; we will revisit that trade-off in Exercise 6.
-- **[`ContextBuilder._get_identity()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L68)** is something we did not build at all: a small piece of *runtime context* — the workspace path, the OS, the Python version, the channel — rendered into a Markdown template ([`templates/agent/identity.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/agent/identity.md)) and prepended to the system prompt. Real agents need to know whether they are running on macOS or Linux, whether they are talking to a CLI or a Telegram chat, what time it is. Chapter 15 introduces dynamic context injection in earnest; `_get_identity` is the simplest example of it.
+- **[`ContextBuilder.build_system_prompt()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L31)** is the production version of our `build_context()`. Strip away the parts we have not built yet — memory, skills, recent history — and what is left is [`_load_bootstrap_files()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L109) followed by `"\n\n---\n\n".join(parts)`. That is recognisably our function. The interesting difference is that nanobot uses an explicit `---` separator between sections, not a blank line. The trade-off is that the sections are now individually addressable in the prompt and can be re-ordered or removed by index, at the cost of leaking the structural seam to the model.
+- **[`ContextBuilder._load_bootstrap_files()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L109)** is the production version of our `glob("*.md")` loop. It walks an explicit [`BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L19) list in fixed order, and prefixes each file's content with a `## <filename>` header so the model can refer to them by name. Hard-coded order beats alphabetical sort once you care which file the model reads first; we will revisit that trade-off in Exercise 6.
+- **[`ContextBuilder._get_identity()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L68)** is something we did not build at all: a small piece of *runtime context* — the workspace path, the OS, the Python version, the channel — rendered into a Markdown template ([`templates/agent/identity.md`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/templates/agent/identity.md)) and prepended to the system prompt. Real agents need to know whether they are running on macOS or Linux, whether they are talking to a CLI or a Telegram chat, what time it is. Chapter 15 introduces dynamic context injection and  `_get_identity` is the simplest example of it.
 
-Two production nuances worth flagging now, because they are invisible from a forty-line script but inevitable once the system prompt does real work:
+Some design decision to notice here:
 
 1. **Templates are bundled inside the package, not assumed to live in a sibling directory.** Nanobot reads its templates with `importlib.resources.files("nanobot") / "templates"`, which works whether nanobot is installed from PyPI, a wheel, or a checkout. Our `pathlib.Path(__file__).parent / "templates"` is fine for a script you run with `uv run`, but it breaks the moment you `pip install` your agent into another project.
-2. **The system prompt has structure inside it.** Our version is one flat string; nanobot's is sections joined by `---`, with stable headings (`# Memory`, `# Active Skills`, `# Recent History`) so other parts of the codebase can read or write specific sections by name. By Chapter 17, when long-term memory is editing the system prompt at runtime, that addressability stops being a stylistic choice and becomes a requirement.
+2. **The system prompt has structure inside it.** Our version is one flat string but nanobot's is sections joined by `---`, with stable headings (`# Memory`, `# Active Skills`, `# Recent History`) so other parts of the codebase can read or write specific sections by name. By Chapter 17, when long-term memory is editing the system prompt at runtime, that addressability stops being a stylistic choice and becomes a requirement.
 
 The closest single file to read after this chapter is [`nanobot/nanobot/agent/context.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py). Try to recognise, on first read, the `for md_file in sorted(...)` loop from our `build_context` hiding inside [`_load_bootstrap_files`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/context.py#L109).
 

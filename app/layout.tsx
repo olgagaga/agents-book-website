@@ -7,7 +7,7 @@ export const metadata: Metadata = {
     template: "%s · AI Agent Engineering",
   },
   description:
-    "Build a personal AI agent from scratch in Python, one concept at a time.",
+    "Build a personal AI agent from scratch in Python.",
 };
 
 // Set the color theme before first paint to avoid a flash of the wrong theme.

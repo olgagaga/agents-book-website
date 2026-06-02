@@ -1,22 +1,22 @@
 # Chapter 4: Streaming Responses
 
-The `chat()` function in `main.py` waits for the model's full reply before printing anything. That is not how the model actually works — it generates tokens one at a time, and the first word is ready within a few hundred milliseconds. Our code is sitting on it.
+The `chat()` function in `main.py` waits for the model's full reply before printing anything. That is not how the model actually works, instead it generates tokens one at a time, and the first word is ready within a few hundred milliseconds. Our code is sitting on it.
 
 By the end of this chapter, `llm()` will be a Python generator that yields text deltas as they arrive, `chat()` will render them live, and the system prompt will be marked for prompt caching so we are not paying full price to re-process it on every turn.
 
 ## Why streaming matters
 
-Three things change when you turn streaming on:
+There are three main advantages of introducing streaming into the application:
 
-1. **Time to first token drops dramatically.** Without streaming, the user waits for the entire response. With streaming, they see the first words within a few hundred milliseconds. The total time to finish the reply is the same, but the *perceived* latency — how long the agent feels frozen — collapses to nearly zero.
+1. **Time to first token drops dramatically.** Without streaming, the user waits for the entire response. With streaming, they see the first words within a few hundred milliseconds. The total time to finish the reply is the same, but the *perceived* latency — how long the agent feels frozen — collapses significantly.
 
-2. **You can act on partial output.** The CLI tool will only use streaming for display, but agents that route output to other places — a Telegram channel that shows typing indicators, a UI that renders Markdown progressively, a downstream tool that begins work on the first paragraph — all benefit. We will exploit this much more aggressively in Chapter 22.
+2. **You can act on partial output.** The CLI tool will only use streaming for display, but agents that route output to other places like a Telegram channel that shows typing indicators, a UI that renders Markdown progressively, a downstream tool that begins work on the first paragraph, all benefit. We will exploit this much more aggressively in Chapter 22.
 
-3. **Tool calls stream too — and that matters more than it sounds.** Once we add tools (Chapter 7), the model emits the tool name first, then the arguments piece by piece. Without streaming, a tool whose arguments are a 2-KB shell command freezes the agent for seconds while you wait for the closing brace. With streaming, you can render `calling read_file('notes.txt')...` the moment the function name commits, and — critically — the user has a window to hit Ctrl-C if they see the agent about to do something destructive. Chapter 9 builds the interrupt path properly.
+3. **Tool calls stream too — and that matters more than it sounds.** Once we add tools (Chapter 7), the model emits the tool name first, then the arguments piece by piece. Without streaming, a tool whose arguments are a 2-KB shell command freezes the agent for seconds while you wait for the closing brace. With streaming, you can render `calling read_file('notes.txt')...` the moment the function name commits, and the user has a window to hit Ctrl-C if they see the agent about to do something destructive. Chapter 9 builds the interrupt path properly.
 
 ## How streaming works, mechanically
 
-Streaming is built on **server-sent events** (SSE) [1], a thin protocol on top of HTTP. The client opens a single long-lived HTTP connection. The server keeps the connection open and writes events to it as they happen. Each event has a name and a JSON data payload, separated by blank lines:
+Streaming is built on server-sent events (SSE) [1], a thin protocol on top of HTTP. The client opens a single long-lived HTTP connection. The server keeps the connection open and writes events to it as they happen. Each event has a name and a JSON data payload, separated by blank lines:
 
 ```
 event: content_block_delta
@@ -26,7 +26,7 @@ event: content_block_delta
 data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" there"}}
 ```
 
-You can read raw SSE with nothing more than a streaming HTTP client. We will not — the SDK does this for us — but it is good to know that it is plain text over an HTTP connection.
+You can read raw SSE with nothing more than a streaming HTTP client. We will do this with SDK though, but it is good to know that it is plain text over an HTTP connection.
 
 Anthropic's stream emits a fixed sequence of event types per response [2]:
 
@@ -41,7 +41,7 @@ Anthropic's stream emits a fixed sequence of event types per response [2]:
 
 For a plain-text reply, the sequence is `message_start → content_block_start (text) → many content_block_deltas → content_block_stop → message_delta → message_stop`. For a reply that includes a tool call, you get a second `content_block_start/delta/stop` cycle for the `tool_use` block. For adaptive thinking, you get a `thinking` block first, then a `text` block.
 
-We are not going to consume raw events directly in this chapter. We will use the SDK's high-level helper, `client.messages.stream(...)`. Under the hood it does three small but tedious things: it opens the SSE connection and parses the `event:` / `data:` lines back into Python objects, it routes each event by type into a typed object so you do not have to pattern-match on raw JSON, and it accumulates deltas as they arrive so a final `get_final_message()` call can hand you a fully assembled `Message` with `content`, `usage`, and `stop_reason` populated. Doing this by hand is not hard — perhaps fifty lines of Python — but it is fifty lines that tend to drift away from the spec as new event types are added (extended thinking, server-side tool calls, refusals). Stretch Exercise 7 has you replace `text_stream` with raw event iteration so you can see the underlying machinery; Stretch Exercise 8 has you parse the SSE protocol from a raw HTTP stream without the SDK at all.
+We will use the SDK's high-level helper, `client.messages.stream(...)` instead of consuming raw events directly. Under the hood it does three things: it opens the SSE connection and parses the `event:` / `data:` lines back into Python objects, then it routes each event by type into a typed object so you do not have to pattern-match on raw JSON, and finally it accumulates deltas as they arrive so a final `get_final_message()` call can hand you a fully assembled `Message` with `content`, `usage`, and `stop_reason` populated. Doing this by hand is not hard and stretch Exercise 7 has you replace `text_stream` with raw event iteration so you can see the underlying machinery. At the same time, Stretch Exercise 8 has you parse the SSE protocol from a raw HTTP stream without the SDK at all.
 
 ## Refactoring `llm` into a generator
 
@@ -57,11 +57,11 @@ with client.messages.stream(
         print(text, end="", flush=True)
 ```
 
-`stream.text_stream` is a high-level helper that yields just the text deltas — exactly what the CLI tool needs to render a reply live. (Iterating the stream object directly gives you the raw event stream from the table above; we will need that for tool calls in Chapter 7, but `text_stream` covers everything in this chapter and Stretch Exercise 7 has you reproduce it from raw events.)
+`stream.text_stream` is a high-level helper that yields just the text deltas — exactly what the CLI tool needs to render a reply live. (Iterating the stream object directly gives you the raw event stream from the table above and we will need that for tool calls in Chapter 7, but `text_stream` covers everything in this chapter.)
 
-Our `llm` function in Chapter 3 returned a string — the full reply, fetched in one blocking call. We are going to change it to *yield* text deltas as they arrive, wrapping `messages.stream(...)` instead of `messages.create(...)`. That makes it a Python generator, and changes its type signature from `-> str` to `-> Iterator[str]`.
+Our `llm` function in Chapter 3 returned the full reply, fetched in one blocking call. We are going to change it to yield text deltas as they arrive, wrapping `messages.stream(...)` instead of `messages.create(...)`. That makes it a Python generator, and changes its type signature from `-> str` to `-> Iterator[str]`.
 
-A *generator* is a function that uses `yield` instead of `return`. When you call it, you do not get its return value — you get a generator object that suspends the function's execution at each `yield` and resumes it on the next iteration. Local variables stay alive between yields, so the function effectively pauses mid-flight and picks up exactly where it left off when the caller asks for the next value. Generators are how Python expresses "produce values lazily, one at a time, without materialising the whole sequence in memory" — exactly what we want for a stream of text deltas. PEP 255 [3] is the original specification if you want the historical motivation.
+A generator is a function that uses `yield` instead of `return`. When you call it, you do not get its return value, you get a generator object that suspends the function's execution at each `yield` and resumes it on the next iteration. Local variables stay alive between yields, so the function effectively pauses mid-flight and picks up exactly where it left off when the caller asks for the next value. Simply said, fenerators produce values lazily without materializing the whole sequence in memory. PEP 255 [3] is the original specification if you want the historical motivation.
 
 Add the `Iterator` type to the imports at the top of `main.py`:
 
@@ -69,7 +69,7 @@ Add the `Iterator` type to the imports at the top of `main.py`:
 from typing import Iterator
 ```
 
-`Iterator` lives in the `typing` module [4]; built-in containers like `list` and `dict` work without an import, but parametrised types like `Iterator[str]` need it. Type hints are not enforced at runtime — they exist to be checked by tools and to communicate intent.
+`Iterator` lives in the `typing` module [4].Built-in containers like `list` and `dict` work without an import, but parametrised types like `Iterator[str]` need it. Type hints are not enforced at runtime and exist primarily to be checked by tools and to communicate intent.
 
 First of all, let's change the return type for the `llm()` function:
 
@@ -77,7 +77,7 @@ First of all, let's change the return type for the `llm()` function:
 def llm(messages: list[dict], system: str = "") -> Iterator[str]:
     """Stream the model's reply, yielding text deltas as they arrive."""
 ```
-Now wrap `client.messages.stream(...)` in a `with` block and yield each delta as it arrives. The `with` matters here: when the generator is exhausted (or the caller breaks out early), the context manager closes the underlying HTTP connection cleanly. Forgetting it is a leak waiting to happen.
+Now wrap `client.messages.stream(...)` in a `with` block and yield each delta as it arrives. The `with` matters here: when the generator is exhausted (or the caller breaks out early), the context manager closes the underlying HTTP connection cleanly. 
 
 ```python
 def llm(messages: list[dict], system: str = "") -> Iterator[str]:
@@ -93,7 +93,7 @@ def llm(messages: list[dict], system: str = "") -> Iterator[str]:
 ```
 
 
-Callers who want the full string get it via `"".join(llm(messages))`. Streaming is the new default; non-streaming becomes a one-liner over it. Nanobot makes a similar trade-off but keeps the two paths as separate methods — `chat_stream()` and `chat()` in `nanobot/nanobot/providers/anthropic_provider.py` — and the runner picks one based on whether the active hook (REPL, Telegram, WebUI) wants live deltas. Both share the same `_build_kwargs` and `_apply_cache_control` plumbing, so the request shape is identical; the only difference is whether the consumer renders text as it arrives.
+Callers who want the full string get it via `"".join(llm(messages))`. Streaming is the new default but enable non-streaming is still easy. Nanobot makes a similar trade-off but keeps the two paths as separate methods — [`chat_stream()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L560) and [`chat()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L540) in [`nanobot/nanobot/providers/anthropic_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py). The runner picks one based on whether the active hook (REPL, Telegram, WebUI) wants live deltas. Both share the same [`_build_kwargs`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L416) and [`_apply_cache_control`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L379) plumbing, so the request shape is identical. The only difference is whether the consumer renders text as it arrives.
 
 With streaming, the SDK handles the work of pulling text out of the right content block. We do not care, here, that the model might also be emitting thinking blocks or tool blocks because `text_stream` filters to text.
 
@@ -111,7 +111,7 @@ print("\n")
 messages.append({"role": "assistant", "content": "".join(chunks)})
 ```
 
-Two things in this block deserve a callout. The `flush=True` argument is mandatory: Python's `print` buffers stdout by default, and without flushing the "live" stream will not appear until the buffer fills or the program exits — the whole illusion collapses. And we accumulate deltas in a list and join at the end rather than building the reply with `reply += text`, because repeated string concatenation is technically O(n²) in Python. The reason is that strings are immutable: `reply += text` cannot grow the existing buffer in place, so the interpreter allocates a fresh string of length `len(reply) + len(text)`, copies the old contents into it, copies the new chunk on the end, and lets the old string be garbage-collected. Across N deltas of average size k, the total work is roughly `k + 2k + 3k + ... + Nk = O(N²·k)`, and the peak memory footprint includes both the old and new buffers at every step. A list of chunks plus one final `"".join(chunks)` is O(N) in time and O(N·k) in memory: the list holds N pointers to existing string objects (no copying), and `join` allocates the final buffer exactly once. The Python FAQ documents this idiom directly [5]. CPython has a special-case optimisation that sometimes mutates the buffer in place when the string has no other references, but it is fragile (any aliasing breaks it) and not something to rely on.
+Notice the following. The `flush=True` argument is mandatory: Python's `print` buffers stdout by default, and without flushing the "live" stream will not appear until the buffer fills or the program exits. And we accumulate deltas in a list and join at the end rather than building the reply with `reply += text`, because repeated string concatenation is technically O(n²) in Python. The reason is that strings are immutable: `reply += text` cannot grow the existing buffer in place, so the interpreter allocates a fresh string of length `len(reply) + len(text)`, copies the old contents into it, copies the new chunk on the end, and lets the old string be garbage-collected. Across N deltas of average size k, the total work is roughly `k + 2k + 3k + ... + Nk = O(N²·k)`, and the peak memory footprint includes both the old and new buffers at every step. A list of chunks plus one final `"".join(chunks)` is O(N) in time and O(N·k) in memory: the list holds N pointers to existing string objects, and `join` allocates the final buffer exactly once. The Python FAQ documents this idiom directly [5]. CPython has a special-case optimisation that sometimes mutates the buffer in place when the string has no other references, but it is fragile (any aliasing breaks it) and not something to rely on.
 
 
 Run it:
@@ -125,11 +125,11 @@ you: explain how a hash table works in 150 words
 assistant: A hash table stores key-value pairs for fast lookup. It works in three steps:...
 ```
 
-The reply now appears word by word instead of arriving as a single block.
+Notice how the reply now appears word by word instead of arriving as a single block.
 
 ## Getting the final message after streaming
 
-Streaming gives us a stream of text. It does not, by itself, give us the things we got from the non-streaming response: `usage`, `stop_reason`, the full `content` list. Those are still available — the SDK accumulates them under the hood and exposes them via `stream.get_final_message()`, which you call after the stream has been consumed:
+Streaming gives us a stream of text. It does not, by itself, give us the things we got from the non-streaming response: `usage`, `stop_reason`, the full `content` list. Those are still available because the SDK accumulates them under the hood and exposes them via `stream.get_final_message()`, which you call after the stream has been consumed:
 
 ```python
 with client.messages.stream(...) as stream:
@@ -144,9 +144,9 @@ We are not threading this through `llm` yet. The current CLI tool does not need 
 
 ## Prompt caching
 
-We now have a streaming client and a system prompt. Streaming reduced the time it takes to *display* a reply, but it did not change the time it takes to *start* generating one: every turn still re-processes the entire system prompt and conversation history from scratch. With the small example system prompt assembled from template files from Chapter 3 (a few hundred tokens of Markdown), nobody will notice. With real templates — many skill files, accumulated memory, instructions that grow over time — the system prompt will become the dominant cost on every turn.
+We now have a streaming client and a system prompt. Streaming reduced the time it takes to display a reply, but it did not change the time it takes to start generating one: every turn still re-processes the entire system prompt and conversation history from scratch. With the small example system prompt assembled from template files from Chapter 3 (a few hundred tokens of Markdown), nothing will change. With real templates (skill files, accumulated memory, instructions), the system prompt will become the dominant cost on every turn.
 
-Prompt caching is the lever for that. The Anthropic API charges roughly **10%** of the normal input-token rate (0.1×) for cached input, with a one-time write cost of about 1.25× when the cache is first populated [6]. Anthropic reports that long prompts can be served at up to 90% lower cost and 85% lower latency once a cache hit lands [7]. Mechanically, providers implement this by retaining the model's *KV cache* — the per-layer key/value tensors produced when the prefix was first processed — and reusing them on subsequent requests with the same prefix, skipping the prefill step entirely. The vLLM team's PagedAttention paper [8] is a good in-depth read on how serving systems manage KV-cache memory across many concurrent requests. Skipping prefill is also why cache reads improve time-to-first-token: there is no work to do before the first generated token comes out.
+Prompt caching is the lever for that. The Anthropic API charges roughly 10% of the normal input-token rate (0.1×) for cached input, with a one-time write cost of about 1.25× when the cache is first populated [6]. Anthropic reports that long prompts can be served at up to 90% lower cost and 85% lower latency once a cache hit lands [7]. Mechanically, providers implement this by retaining the model's KV cache, which is the per-layer key/value tensors produced when the prefix was first processed.The vLLM team's PagedAttention paper [8] is a good in-depth read on how serving systems manage KV-cache memory across many concurrent requests. Skipping prefill is also why cache reads improve time-to-first-token: there is no work to do before the first generated token comes out.
 
 The mechanics on the Anthropic API are simple. You add `cache_control={"type": "ephemeral"}` at the top level of your request, and the API automatically caches the last cacheable block of the prefix:
 
@@ -161,28 +161,23 @@ with client.messages.stream(
     ...
 ```
 
-That is the entire change. The first request after a workspace edit *writes* the cache (at a 1.25× input rate). Subsequent requests within five minutes *read* the cache at the 10% rate. After five minutes of inactivity, the cache entry expires and the next request re-writes it [6]. A 1-hour TTL is also available at a higher 2× write cost, useful for prefixes that get reused across long sessions.
+After five minutes of inactivity, the cache entry expires and the next request re-writes it [6]. A 1-hour TTL is also available at a higher 2× write cost, useful for prefixes that get reused across long sessions.
 
-There are three things to know that are not obvious:
+It is worth knowing that caching is a strict prefix match. If you change any byte in the system prompt the cache is invalidated and you write fresh. This is fine for our use case (the workspace changes rarely) and a real footgun in production agents that interpolate timestamps into the system prompt. Chapter 24 spends time on the audit pattern for catching this kind of silent invalidation.
 
-1. **Caching is a strict prefix match.** If you change *any* byte in the system prompt the cache is invalidated and you write fresh. Edit `persona.md` and the cache is gone until you rebuild it. This is fine for our use case (the workspace changes rarely) and a real footgun in production agents that interpolate timestamps into the system prompt. Chapter 24 spends time on the audit pattern for catching this kind of silent invalidation.
+There is also a minimum cacheable size. For Claude Opus 4.7 it is 4,096 tokens, while smaller models have lower thresholds (Sonnet 4.6 sits at 2,048 tokens and Sonnet 4.5 at 1,024) [6]. If your prefix is shorter, the cache silently does nothing and `cache_creation_input_tokens` returns zero. Our example workspace is far below that threshold, so adding `cache_control` here is a no-op until the workspace grows. Adding the flag now is harmless and means the moment the workspace passes the threshold, we start saving money without further code changes.
 
-2. **There is a minimum cacheable size.** For Claude Opus 4.7 it is 4,096 tokens; smaller models have lower thresholds (Sonnet 4.6 sits at 2,048 tokens; Sonnet 4.5 at 1,024) [6]. If your prefix is shorter, the cache silently does nothing — `cache_creation_input_tokens` returns zero. Our example workspace is far below that threshold, so adding `cache_control` here is a no-op until the workspace grows. Adding the flag now is harmless and means the moment the workspace passes the threshold, we start saving money without further code changes.
-
-3. **You can verify it is working.** The response's `usage` object reports `cache_creation_input_tokens` (tokens you paid 1.25× to write) and `cache_read_input_tokens` (tokens you paid 0.1× to read). After two consecutive requests with the same prefix, the second should report a non-zero `cache_read_input_tokens`. If it does not, something invalidated the cache between the calls — usually a silent timestamp or non-deterministic ordering somewhere in the prefix. Exercise 5 has you grow the templates directory until the cache kicks in and observe the difference.
+To verify that it is working, notice that the response's `usage` object reports `cache_creation_input_tokens` (tokens you paid 1.25× to write) and `cache_read_input_tokens` (tokens you paid 0.1× to read). After two consecutive requests with the same prefix, the second should report a non-zero `cache_read_input_tokens`. If it does not, something invalidated the cache between the calls, usually a silent timestamp or non-deterministic ordering somewhere in the prefix. Exercise 5 has you grow the templates directory until the cache kicks in and observe the difference.
 
 ## Production reference
 
-Open [`nanobot/nanobot/providers/anthropic_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py) and scroll to [`chat_stream()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L560) near the bottom. Strip away the surrounding error handling and you will see exactly what we just wrote: open `messages.stream(**kwargs)` as an async context manager, iterate `text_stream`, hand each delta to a callback, then call `get_final_message()` to recover `usage` and `stop_reason`. Three functions in particular map directly to what we built (or hand-waved) in this chapter:
+Open [`nanobot/nanobot/providers/anthropic_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py) and scroll to [`chat_stream()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L560) near the bottom. Strip away the surrounding error handling and you will see exactly what we just wrote: open `messages.stream(**kwargs)` as an async context manager, iterate `text_stream`, hand each delta to a callback, then call `get_final_message()` to recover `usage` and `stop_reason`. Three functions in particular map directly to what we built:
 
 - **[`chat_stream()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L560)** is the async equivalent of our generator `llm()`. Instead of `yield`, it pushes each delta into an `on_content_delta` callback supplied by the caller (the runner). Same shape, different concurrency model: a callback works better when one stream feeds several consumers (REPL, Telegram, observability) at the same time, which is what the runner needs.
-- **[`_apply_cache_control()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L379)** is the production version of the single `cache_control={"type": "ephemeral"}` line we added. Notice it does more than mark the system prompt — it also walks the messages list and tools list and places markers at *each* of the four allowed cache breakpoints, so a tool catalog and a long conversation tail can be cached independently. The [`_tool_cache_marker_indices`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L233) helper (on the base class) picks where the breakpoints go. Chapter 7 explains why the tool catalog is the second most expensive thing to cache.
-- **[`chat_stream_with_retry()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L527)** in [`nanobot/nanobot/providers/base.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py) wraps `chat_stream` with retry-on-transient-failure logic. Streaming complicates retries — the first delta has already been emitted to the user when the connection drops mid-reply — and this is where the policy lives.
+- **[`_apply_cache_control()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L379)** is the production version of the single `cache_control={"type": "ephemeral"}` line we added. Notice it does more than mark the system prompt: it also walks the messages list and tools list and places markers at each of the four allowed cache breakpoints, so a tool catalog and a long conversation tail can be cached independently. The [`_tool_cache_marker_indices`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L233) helper (on the base class) picks where the breakpoints go. Chapter 7 explains why the tool catalog is the second most expensive thing to cache.
+- **[`chat_stream_with_retry()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L527)** in [`nanobot/nanobot/providers/base.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py) wraps `chat_stream` with retry-on-transient-failure logic. Streaming complicates retries: the first delta has already been emitted to the user when the connection drops mid-reply and this is where the policy lives.
 
-Two production nuances are worth flagging now, because they are invisible from a single-user CLI but inevitable the moment a real loop wraps the stream:
-
-1. **Idle timeouts wrap the stream.** Each `__anext__()` on the iterator is wrapped in `asyncio.wait_for(..., timeout=idle_timeout_s)` (90 seconds by default, controlled by `NANOBOT_STREAM_IDLE_TIMEOUT_S`). Without this, a half-open TCP connection can hang the agent indefinitely; the SDK does not time out on its own.
-2. **`get_final_message()` is treated as awaitable, not free.** It is wrapped in the same idle timeout. The final message arrives over the same connection as the deltas, and a network glitch at the end of a stream is just as fatal as one at the beginning.
+Notice how idle timeouts wrap the stream. Each `__anext__()` on the iterator is wrapped in `asyncio.wait_for(..., timeout=idle_timeout_s)` (90 seconds by default, controlled by `NANOBOT_STREAM_IDLE_TIMEOUT_S`). Without this, a half-open TCP connection can hang the agent indefinitely and the SDK does not time out on its own.
 
 Skim [`chat_stream`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L560) once you have written your own version. The plain-text path is recognizably what we just wrote; the rest is bookkeeping for the things we will add in later chapters.
 
@@ -204,7 +199,7 @@ Skim [`chat_stream`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b
 
 8. **Stretch: Stream without the SDK.** Drop down one more layer and call the API yourself. Use `httpx.stream("POST", "https://api.anthropic.com/v1/messages", json={..., "stream": True}, headers={"x-api-key": ..., "anthropic-version": "2023-06-01"})` and iterate `response.iter_lines()`. You will see raw SSE — `event: content_block_delta` lines paired with `data: {...}` JSON payloads, separated by blank lines. Parse them by hand: skip blanks, strip the `event: ` and `data: ` prefixes, `json.loads` the payload, dispatch on `type`, and reproduce the text-only output of `text_stream`. Compare your line count to `client.messages.stream`. This is what the SDK is doing for you on every call; once you have written it once you understand exactly why "just use the SDK" is the right default.
 
-9. **Stretch: Cache audit.** Open `_apply_cache_control` in `nanobot/nanobot/providers/anthropic_provider.py` and notice that it places the `cache_control` marker on the *next-to-last* user message rather than the last one. Predict why before reading further. (Hint: think about what changes between consecutive turns and what does not, and which prefix you want to be cacheable on the *next* turn.) Then write a tiny audit helper in your own code that, given two consecutive `usage` objects, prints `cache_hit_ratio = cache_read / (cache_read + cache_creation + input_tokens)`. Run a 10-turn conversation with a padded workspace (per Exercise 5) and watch the ratio climb toward 1.0 after the second turn. Chapter 24 turns this into a proper observability widget.
+9. **Stretch: Cache audit.** Open [`_apply_cache_control`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L379) in [`nanobot/nanobot/providers/anthropic_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py) and notice that it places the `cache_control` marker on the *next-to-last* user message rather than the last one. Predict why before reading further. (Hint: think about what changes between consecutive turns and what does not, and which prefix you want to be cacheable on the *next* turn.) Then write a tiny audit helper in your own code that, given two consecutive `usage` objects, prints `cache_hit_ratio = cache_read / (cache_read + cache_creation + input_tokens)`. Run a 10-turn conversation with a padded workspace (per Exercise 5) and watch the ratio climb toward 1.0 after the second turn. Chapter 24 turns this into a proper observability widget.
 
 10. **Stretch: Implement your own KV cache.** Prompt caching is KV-cache reuse with a pricing layer on top. This exercise builds it from the data structure up.
 

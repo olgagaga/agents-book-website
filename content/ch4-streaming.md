@@ -8,11 +8,11 @@ By the end of this chapter, `llm()` will be a Python generator that yields text 
 
 There are three main advantages of introducing streaming into the application:
 
-1. **Time to first token drops dramatically.** Without streaming, the user waits for the entire response. With streaming, they see the first words within a few hundred milliseconds. The total time to finish the reply is the same, but the *perceived* latency — how long the agent feels frozen — collapses significantly.
+1. Time to first token drops dramatically. Without streaming, the user waits for the entire response. With streaming, they see the first words within a few hundred milliseconds. The total time to finish the reply is the same, but the *perceived* latency — how long the agent feels frozen — collapses significantly.
 
-2. **You can act on partial output.** The CLI tool will only use streaming for display, but agents that route output to other places like a Telegram channel that shows typing indicators, a UI that renders Markdown progressively, a downstream tool that begins work on the first paragraph, all benefit. We will exploit this much more aggressively in Chapter 22.
+2. You can act on partial output. The CLI tool will only use streaming for display, but agents that route output to other places like a Telegram channel that shows typing indicators, a UI that renders Markdown progressively, a downstream tool that begins work on the first paragraph, all benefit. We will exploit this much more aggressively in Chapter 22.
 
-3. **Tool calls stream too — and that matters more than it sounds.** Once we add tools (Chapter 7), the model emits the tool name first, then the arguments piece by piece. Without streaming, a tool whose arguments are a 2-KB shell command freezes the agent for seconds while you wait for the closing brace. With streaming, you can render `calling read_file('notes.txt')...` the moment the function name commits, and the user has a window to hit Ctrl-C if they see the agent about to do something destructive. Chapter 9 builds the interrupt path properly.
+3. Once we add tools (Chapter 7), the model emits the tool name first, then the arguments piece by piece. Without streaming, a tool whose arguments are a 2-KB shell command freezes the agent for seconds while you wait for the closing brace. With streaming, you can render `calling read_file('notes.txt')...` the moment the function name commits, and the user has a window to hit Ctrl-C if they see the agent about to do something destructive. Chapter 9 builds the interrupt path properly.
 
 ## How streaming works, mechanically
 

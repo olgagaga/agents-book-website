@@ -1,18 +1,18 @@
 # Chapter 5: Provider Abstraction
 
-We have spent four chapters writing against the Anthropic API. The `chat()` function in `main.py` already streams replies, threads context through the workspace, and prompt-caches the system prompt — but every byte still goes to one company. By the end of this chapter, the `llm()` function is gone, replaced by a `Provider` object that hides which API actually answers. We will write the abstraction itself, two concrete implementations covering most of the LLM ecosystem, and a `FallbackProvider` that keeps the agent alive when one of those APIs goes down.
+We have spent four chapters writing against the Anthropic API. The `chat()` function in `main.py` already streams replies, threads context through the workspace, and prompt-caches the system prompt. 
+
+By the end of this chapter, the `llm()` function is gone, replaced by a `Provider` object that hides which API actually answers. We will write the abstraction itself, two concrete implementations covering most of the LLM ecosystem, and a `FallbackProvider` that keeps the agent alive when one of those APIs goes down.
 
 ## Why abstract at all
 
-Four reasons cover most of the agent-engineering literature.
+Frontier models trade leadership month-to-month, but the price gap between the top of the catalog and the small-model tier stays roughly an order of magnitude. As of 2026, Claude Opus 4.7 charges $15 per million input tokens and $75 per million output tokens [1]; Claude Haiku 4.5 sits at $1 / $5; OpenAI's `gpt-5-mini` is in the same neighborhood as Haiku; Gemini 2.5 Flash-Lite charges $0.10 / $0.40 [2]; a Llama 3 model running locally on a workstation GPU is effectively free per token (you pay in electricity and capital). Most agent turns include picking which tool to call, summarizing a tool result, and deciding to ask a clarifying question. They often do not need the most expensive model. Chapter 19 will explicitly route subagents to cheaper models with the help of the abstraction defined in this chapter.
 
-**Cost.** Frontier models trade leadership month-to-month, but the price gap between the top of the catalog and the small-model tier stays roughly an order of magnitude. As of 2026, Claude Opus 4.7 charges $15 per million input tokens and $75 per million output tokens [1]; Claude Haiku 4.5 sits at $1 / $5; OpenAI's `gpt-5-mini` is in the same neighborhood as Haiku; Gemini 2.5 Flash-Lite charges $0.10 / $0.40 [2]; a Llama 3 model running locally on a workstation GPU is effectively free per token (you pay in electricity and capital). Most agent turns — picking which tool to call, summarizing a tool result, deciding to ask a clarifying question — do not need the most expensive model on the menu. Chapter 19 will explicitly route subagents to cheaper models; the abstraction in this chapter is what lets that routing exist at all.
+At the same time, on the LMArena text leaderboard, the top three models sit within overlapping 95% confidence intervals. This is a statistical tie that rotates week to week [3]. Aggregate "intelligence" indices like Artificial Analysis's [4] tell the same story: Claude, Gemini, and GPT cluster within a few points across the suite. The real spreads show up on specific benchmarks: Claude leads coding-style work on SWE-bench Verified by a meaningful margin [5], Gemini wins on cost-per-token at the small-model tier, OpenAI's models tend to lead on multimodal eval rounds. The benchmarks themselves move quickly, for example, older ones like MMLU-Pro are saturating at the top, and GPQA Diamond and HLE are the current frontier discriminators [6]. An agent that can talk to all of them has more to draw on and can be re-pointed at the new leader the week the leaderboard shifts. Both Artificial Analysis [4] and the LMArena leaderboard [3] are reasonable places to track this in real time.
 
-**Capability.** The frontier is currently a plateau. On the LMArena text leaderboard, the top three models sit within overlapping 95% confidence intervals — a statistical tie that rotates week to week [3]. Aggregate "intelligence" indices like Artificial Analysis's [4] tell the same story: Claude, Gemini, and GPT cluster within a few points across the suite. The real spreads show up on specific benchmarks: Claude leads coding-style work on SWE-bench Verified by a meaningful margin [5], Gemini wins on cost-per-token at the small-model tier, OpenAI's models tend to lead on multimodal eval rounds. The benchmarks themselves move quickly — older ones like MMLU-Pro are saturating at the top, and GPQA Diamond and HLE are the current frontier discriminators [6]. An agent that can talk to all of them has more to draw on, *and* can be re-pointed at the new leader the week the leaderboard shifts. Both Artificial Analysis [4] and the LMArena leaderboard [3] are reasonable places to track this in real time.
+Another concern worth mentioning to support the abstraction layer is privacy. Some inputs should never leave your machine. Patient records under HIPAA, source code that constitutes trade secrets, attorney-client correspondence under privilege, financial statements before public disclosure, draft research before submission are good examples. The way agents address this is by running an open-weights model — Llama [7], Mistral [8], Qwen [9] — locally through a runner like Ollama [10] or LM Studio [11]. Both runners expose an HTTP endpoint with the same shape as a hosted provider, so swapping a remote model for a local one becomes a configuration change at the provider layer rather than a code change anywhere else.
 
-**Privacy.** Some inputs should never leave your machine. Patient records under HIPAA, source code that constitutes trade secrets, attorney-client correspondence under privilege, financial statements before public disclosure, draft research before submission — for any of these, "we send it to a third-party API" is a non-starter regardless of how good the model is. The way agents address this is by running an open-weights model — Llama [7], Mistral [8], Qwen [9] — locally through a runner like Ollama [10] or LM Studio [11]. Both runners expose an HTTP endpoint with the same shape as a hosted provider, so swapping a remote model for a local one becomes a configuration change at the provider layer rather than a code change anywhere else.
-
-**Availability.** Hosted providers go down. Anthropic, OpenAI, and Google all maintain public status pages [12][13][14] and all of them post incidents on a regular cadence. An agent that can fall back from one provider to another keeps working through the outage; an agent wired to a single SDK stops at the first 503. The last section of this chapter implements that failover in about thirty lines.
+Another thing is that hosted providers go down. Anthropic, OpenAI, and Google all maintain public status pages [12][13][14] and all of them post incidents on a regular cadence. An agent that can fall back from one provider to another keeps working through the outage compared to an agent tied to one specific SDK. 
 
 The abstraction we build here makes all four of these tractable: cost routing, capability routing, on-prem deployment, and failover all become questions of which `Provider` instance you hand to `chat()`.
 
@@ -82,7 +82,7 @@ client.chat.completions.create(
 
 The model identifier rotates fast — Google deprecated `gemini-2.5-flash` in mid-2026 — so always check the current Gemini docs [20] before wiring a specific id into a long-lived config.
 
-Anthropic also offers an OpenAI-compatible endpoint [21], but the documentation is unusually direct about its scope: it is "primarily intended to test and compare model capabilities, and is not considered a long-term or production-ready solution." The unsupported list is the reason. **Prompt caching is not supported** — every request pays the full system-prompt cost, which is what made the entire Chapter 4 effort worthwhile. Citations, structured outputs (`strict` is silently ignored), and PDF processing all fall back to text-only behavior. Extended thinking works as a black box: the model thinks, but you cannot read the thinking deltas. Cache statistics in the response are always empty. The pattern is consistent — features that fit the OpenAI request shape are translated faithfully; features Anthropic ships that do not have an OpenAI counterpart are dropped silently. That is a useful thing to have seen concretely once: it is exactly the leaky-abstraction problem we will revisit in the litellm section. For Anthropic specifically, the right answer is to keep the native SDK in `AnthropicProvider` and not route Claude through an OpenAI client.
+Anthropic also offers an OpenAI-compatible endpoint [21], but the documentation says it is "primarily intended to test and compare model capabilities, and is not considered a long-term or production-ready solution." For example, prompt caching is not supported so every request pays the full system-prompt cost, which is what made the entire Chapter 4 effort worthwhile. Citations, structured outputs (`strict` is silently ignored), and PDF processing all fall back to text-only behavior. Extended thinking works as a black box: the model thinks, but you cannot read the thinking deltas. Cache statistics in the response are always empty. For Anthropic specifically, the right answer is to keep the native SDK in `AnthropicProvider`.
 
 So we need exactly two concrete implementations: one for Anthropic (native), one for any OpenAI-compatible endpoint (covering OpenAI itself, Gemini, OpenRouter, Ollama, LM Studio, and everything else).
 
@@ -106,19 +106,15 @@ class Provider(ABC):
 
 Some of the Python here is worth a closer look, especially if you come from Java or C++.
 
-`ABC` is the *abstract base class* marker from the `abc` module [22]. A class that inherits from `ABC` and contains at least one `@abstractmethod` cannot be instantiated directly — Python raises `TypeError` if you try. This is Python's way of declaring an interface. Java would use the `interface` keyword and `abstract` methods; C++ uses pure virtual methods (`virtual void f() = 0;`) on a class with no implementation. The ergonomics differ — Python has no compile step, so the check happens the first time you try to construct the class — but the contract is the same: subclasses must override every `@abstractmethod` to be instantiable.
+`ABC` is the *abstract base class* marker from the `abc` module [22]. A class that inherits from `ABC` and contains at least one `@abstractmethod` cannot be instantiated directly and Python will raise `TypeError` if you try. This is Python's way of declaring an interface. Java would use the `interface` keyword and `abstract` methods; C++ uses pure virtual methods (`virtual void f() = 0;`) on a class with no implementation. 
 
-Inside `stream`, the body is just `...` — the *Ellipsis* literal. The body is never executed for abstract methods, so a one-character placeholder is conventional. `pass` would also work; `...` is preferred in modern Python because it visually signals "intentionally empty."
+Inside `stream`, the body is just `...` — the Ellipsis literal. The body is never executed for abstract methods, so a one-character placeholder is conventional. `pass` would also work but `...` is preferred in modern Python because it visually signals "intentionally empty."
 
-The `Iterator[str]` return type comes from `typing` (Python 3.9+ also accepts `collections.abc.Iterator`). It says "this returns something you can iterate over, and each iteration yields a `str`." Generators (functions with `yield`) automatically satisfy this; so do plain iterators.
-
-A few words on the interface design itself. The provider takes its configuration once, at construction time — model name, max tokens, API key, base URL — and exposes only `stream()`. That means caching policies, custom headers, timeout values, and SDK-specific kwargs all stay inside the provider. The agent never sees them. If we had instead passed those things into `stream()` on every call, the abstraction would leak in both directions: the agent would have to know about Anthropic's `cache_control` argument, and the provider would have no way to enforce its own defaults.
+Speaking about the interface design itself, the provider takes its configuration once, at construction time — model name, max tokens, API key, base URL — and exposes only `stream()`. That means caching policies, custom headers, timeout values, and SDK-specific kwargs all stay inside the provider. The agent never sees them. If we had instead passed those things into `stream()` on every call, the abstraction would leak in both directions: the agent would have to know about Anthropic's `cache_control` argument, and the provider would have no way to enforce its own defaults.
 
 ## Implementing `AnthropicProvider`
 
-In the `providers/` folder, create `anthropic_provider.py`. The implementation is the existing `llm()` function wrapped into a class — `model` and `max_tokens` become construction-time parameters instead of hard-coded defaults:
-
-A note on the import: write `from providers.base import Provider`, not `from base import Provider`. The bare `from base import …` form only works if the file you are running happens to be inside `providers/`; running `uv run main.py` from `agent/` will fail with `ModuleNotFoundError: No module named 'base'`. The package-qualified form works regardless of which directory the entry point lives in, and it matches how `main.py` already imports the same symbols.
+In the `providers/` folder, create `anthropic_provider.py`. The implementation is the existing `llm()` function wrapped into a class where `model` and `max_tokens` become construction-time parameters instead of hard-coded defaults.
 
 ```python
 from typing import Iterator
@@ -151,7 +147,7 @@ class AnthropicProvider(Provider):
                 yield text
 ```
 
-The `cache_control={"type": "ephemeral"}` flag from Chapter 4 stays here — it is Anthropic-specific and there is no reason to abstract it. OpenAI runs an automatic cache for prompts above a length threshold and requires no caller-side configuration [23], so the OpenAI provider will simply not pass anything cache-related. The `Provider` interface stays clean; each implementation handles caching the way its API expects.
+The `cache_control={"type": "ephemeral"}` flag from Chapter 4 stays here because it is Anthropic-specific. OpenAI runs an automatic cache for prompts above a length threshold and requires no caller-side configuration [23], so the OpenAI provider will simply not pass anything cache-related. The `Provider` interface stays clean and each implementation handles caching the way its API expects.
 
 ## Implementing `OpenAIProvider`
 
@@ -163,7 +159,7 @@ uv add openai
 
 This updates `pyproject.toml` and `uv.lock`. From now on `uv run main.py` will see the `openai` package without any additional steps.
 
-Now create `openai_compatible_provider.py`. The provider has two new ideas — *translating* between the two message-shape conventions, and *iterating* OpenAI's stream events instead of Anthropic's — so we will introduce them one at a time. Start with construction and translation. No streaming yet:
+Now create `openai_compatible_provider.py`. The provider has two new ideas: translating between the two message-shape conventions and iterating OpenAI's stream events instead of Anthropic's. Start with construction and translation without streaming yet:
 
 ```python
 from typing import Iterator
@@ -201,10 +197,10 @@ class OpenAIProvider(Provider):
 
 Compared to the Anthropic version, the differences are small:
 
-- The system prompt goes into the messages list as the first entry with `role="system"`, instead of being a separate parameter. That is the *translation*. The two-line `if system: ...append(...)` then `extend(messages)` is the entire translation logic.
-- The token-budget parameter is `max_completion_tokens`, not `max_tokens`. OpenAI renamed it for newer models; Anthropic stayed with the original name. The provider abstracts the difference away so callers do not care.
+- The system prompt goes into the messages list as the first entry with `role="system"`, instead of being a separate parameter. That is the translation. 
+- The token-budget parameter is `max_completion_tokens`, not `max_tokens`. OpenAI renamed it for newer models and Anthropic stayed with the original name. The provider abstracts the difference away so callers do not care.
 
-This works, but it does not stream — the function yields the entire reply in one chunk after the API call finishes. To switch to real streaming, change two lines:
+To switch to real streaming, we have to change only two lines:
 
 ```python
         stream = self.client.chat.completions.create(
@@ -218,12 +214,11 @@ This works, but it does not stream — the function yields the entire reply in o
                 yield chunk.choices[0].delta.content      # <-- was a single yield
 ```
 
-A few streaming-specific things to notice:
+Notice that OpenAI's streaming response is a plain iterator, not a context manager. Anthropic wraps the stream in `with` so it can clean up the underlying HTTP connection deterministically, while OpenAI's SDK relies on garbage collection. 
 
-- **No `with` block.** OpenAI's streaming response is a plain iterator, not a context manager. Anthropic wraps the stream in `with` so it can clean up the underlying HTTP connection deterministically; OpenAI's SDK relies on garbage collection. Both work; the shapes are just different. This is a real ergonomic difference and a small reason to use both SDKs through an abstraction layer.
-- **`chunk.choices[0].delta.content` can be empty.** OpenAI's stream events are nested inside a list of choices, and a delta with no `content` is a signal that the chunk is something else — usually a tool-call delta (Chapter 7) or a finish-reason marker. The `if chunk.choices and chunk.choices[0].delta.content` guard is what filters down to actual text. We will revisit the empty-content branches when we add tool calls.
+Also,  `chunk.choices[0].delta.content` can be empty. OpenAI's stream events are nested inside a list of choices, and a delta with no `content` is a signal that the chunk is something else, usually a tool-call delta or a finish-reason marker. The `if chunk.choices and chunk.choices[0].delta.content` guard is what filters down to actual text. We will revisit the empty-content branches when we add tool calls.
 
-Because the abstraction is "anything that speaks OpenAI's wire format," the same `OpenAIProvider` class talks to many endpoints just by changing `base_url`:
+As mentioned before, the same `OpenAIProvider` class talks to many endpoints just by changing `base_url`:
 
 ```python
 import os
@@ -257,7 +252,7 @@ For Gemini specifically, the OpenAI-compat endpoint is the practical default. If
 
 ## Wiring it up
 
-In `main.py`, the `llm()` function is now obsolete — its body lives inside `AnthropicProvider.stream()`. Delete the function, delete the `import anthropic` and the module-level `client` it relied on, and replace them with a default provider:
+In `main.py`, the `llm()` function is now obsolete because its body lives inside `AnthropicProvider.stream()`. Delete the function, delete the `import anthropic` and the module-level `client` it relied on, and replace them with a default provider:
 
 ```python
 from providers.anthropic_provider import AnthropicProvider
@@ -284,11 +279,11 @@ for text in provider.stream(messages, system=system):
     chunks.append(text)
 ```
 
-`chat()` no longer mentions Anthropic anywhere. To switch the whole agent to Gemini or to a local model, change the one-line `DEFAULT_PROVIDER = ...` assignment.
+To switch the whole agent to Gemini or to a local model, change the one-line `DEFAULT_PROVIDER = ...` assignment.
 
 ## Verifying the swap actually works
 
-The previous paragraph is a promise. Before building anything else on top of the `Provider` interface, let's cash that promise in and run the same agent against a different backend.
+Before building anything else on top of the `Provider` interface, let's run the same agent against a different backend.
 
 Get a Gemini API key from Google AI Studio (free tier is enough for this) and add it to your `.env`:
 
@@ -326,13 +321,11 @@ you: who made you, and what model are you running?
 assistant: I'm Claude, made by Anthropic.
 ```
 
-Same `chat()` loop, same workspace context, same streaming, same conversation-history accumulation — different backend, different model, different voice. Nothing outside the `DEFAULT_PROVIDER` assignment changed. The Anthropic-specific `cache_control` flag is no longer in the picture when Gemini answers, because `OpenAIProvider.stream` simply does not pass it; the cache markers stay sealed inside `AnthropicProvider` where they belong.
-
 The same one-line trick covers OpenAI itself (`OpenAIProvider(model="gpt-5")` with `OPENAI_API_KEY` in your `.env`) and a local model in Ollama (`OpenAIProvider(model="llama3.1", api_key="ollama", base_url="http://localhost:11434/v1")` — no key needed). The next section makes the swap automatic: instead of you editing the line when one backend is down, the agent picks the next one on its own.
 
 ## Building automatic failover
 
-Now the payoff. The whole point of having a `Provider` interface is that a higher-level provider can wrap others. A `FallbackProvider` takes an ordered list of backends and tries them in turn — if the first one raises a transient error, it moves on to the second.
+The whole point of having a `Provider` interface is that a higher-level provider can wrap others. A `FallbackProvider` takes an ordered list of backends and tries them in turn. This way, if the first one raises a transient error, it moves on to the second.
 
 Create `providers/fallback_provider.py`:
 
@@ -367,11 +360,9 @@ class FallbackProvider(Provider):
         )
 ```
 
-Both subtleties in those twenty lines come down to *when* it is safe to fall back.
+The `yielded_anything` flag is worth paying attention to. If the first provider has already streamed three sentences to the user before the connection drops, falling back to a second provider would mean the user sees those three sentences continue with output from a different model in the same paragraph. So once the first delta has been emitted, an exception terminates the whole call instead of triggering a fallback. Pre-flight failures (auth errors, rate limits, connection errors that fire before any byte is received) are the only cases that legitimately fall back.
 
-The `yielded_anything` flag is the load-bearing one. If the first provider has already streamed three sentences to the user before the connection drops, falling back to a second provider would mean the user sees those three sentences continue with output from a *different* model in the same paragraph. That is worse than failing — the message becomes a Frankenstein and the agent's context now has a half-reply from one model in `messages`. So once the first delta has been emitted, an exception terminates the whole call instead of triggering a fallback. Pre-flight failures (auth errors, rate limits, connection errors that fire before any byte is received) are the only cases that legitimately fall back.
-
-The other subtlety is what "Exception" means here. Catching everything is the simple version and is fine for a chapter. In production, you want to distinguish *retryable* errors (HTTP 429 rate-limit, HTTP 5xx, connection timeouts) from *non-retryable* ones (HTTP 400 bad request, HTTP 401 auth) — the second class will fail on the next provider too, and trying it just adds latency to a guaranteed failure. Exercise 2 asks you to add that distinction.
+The other thing to notice is what "Exception" means here. Catching everything is the simple version and is fine for a chapter. In production, you want to distinguish retryable errors (HTTP 429 rate-limit, HTTP 5xx, connection timeouts) from non-retryable ones (HTTP 400 bad request, HTTP 401 auth) since the second class will fail on the next provider too, and trying it just adds latency to a guaranteed failure. Exercise 2 asks you to add that distinction.
 
 To use it, replace the `DEFAULT_PROVIDER` line in `main.py`:
 
@@ -393,7 +384,7 @@ DEFAULT_PROVIDER = FallbackProvider([
 ])
 ```
 
-The agent now keeps working through an Anthropic outage, an OpenAI outage, *and* a Gemini outage — it only stops when all three provider APIs are down at the same time.
+The agent now stops only when all three provider APIs are down at the same time.
 
 One practical detail before testing: the snippet above assumes you have all three API keys set. The `OpenAI()` and `anthropic.Anthropic()` constructors raise immediately if a key is missing, so a single missing variable will crash `main.py` at import time. If you only have one or two of the keys, build the chain conditionally instead:
 
@@ -416,11 +407,9 @@ The agent code in the repo for this chapter uses this conditional form so a read
 
 ### Testing the failover
 
-You do not need an actual outage to confirm the fallback works — overriding an environment variable on a single command is enough. Each of the following invocations runs `main.py` with one or more API keys deliberately replaced by a bogus value, and you can observe which provider answered by asking the model who it is.
+You do not need an actual outage to confirm the fallback works, just simulate it by overriding an environment variable on a single command is enough. Each of the following invocations runs `main.py` with one or more API keys deliberately replaced by a wrong value, and you can observe which provider answered by asking the model who it is. The agent tries providers in the order they appear in the chain, so the first provider with a valid key wins.
 
-The order matters. The agent tries providers in the order they appear in the chain, so the first provider with a *valid* key wins.
-
-**1. Healthy run (baseline).** All real keys, request goes to Anthropic — first in the chain:
+1. Healthy run (baseline). All real keys, request goes to Anthropic because it is the first in the chain:
 
 ```bash
 uv run main.py
@@ -428,7 +417,7 @@ uv run main.py
 # assistant: I'm Claude, made by Anthropic.
 ```
 
-**2. Anthropic down → OpenAI takes over.**
+2. When Anthropic is down, OpenAI takes over.**
 
 ```bash
 ANTHROPIC_API_KEY=bogus uv run main.py
@@ -436,9 +425,9 @@ ANTHROPIC_API_KEY=bogus uv run main.py
 # assistant: I'm ChatGPT, a large language model from OpenAI.
 ```
 
-The first try (Anthropic) raises an authentication error immediately, before any byte has been streamed, so `FallbackProvider` walks to the next entry. The user sees no error — only a slightly higher first-token latency.
+The first try (Anthropic) raises an authentication error immediately, before any byte has been streamed, so `FallbackProvider` walks to the next entry. The user sees no error, only a higher first-token latency.
 
-**3. Anthropic and OpenAI down → Gemini takes over.**
+3. You can test further and simulate the situation when Anthropic and OpenAI down so that Gemini takes over.**
 
 ```bash
 ANTHROPIC_API_KEY=bogus OPENAI_API_KEY=bogus uv run main.py
@@ -446,7 +435,7 @@ ANTHROPIC_API_KEY=bogus OPENAI_API_KEY=bogus uv run main.py
 # assistant: I'm Gemini, from Google.
 ```
 
-**4. All three down → the chain bottoms out.**
+4. Finally, all three down so the chain bottoms out.
 
 ```bash
 ANTHROPIC_API_KEY=bogus OPENAI_API_KEY=bogus GEMINI_API_KEY=bogus uv run main.py
@@ -454,48 +443,48 @@ ANTHROPIC_API_KEY=bogus OPENAI_API_KEY=bogus GEMINI_API_KEY=bogus uv run main.py
 # RuntimeError: All providers failed; last error: AuthenticationError(...)
 ```
 
-This is the only path that surfaces a user-facing error. Up to that point the abstraction has been silent — exactly what you want from failover.
+This is the only path that surfaces a user-facing error. Up to that point the abstraction has been silent.
 
-What this exercise *does not* verify is the mid-stream guard (`yielded_anything`). Reproducing that requires either a real network drop in the middle of a reply or a more elaborate fault-injection rig. Exercise 2 walks through the production-grade error handling, which is where the mid-stream behavior becomes load-bearing.
+What this exercise does not verify is the mid-stream guard (`yielded_anything`). Reproducing that requires either a real network drop in the middle of a reply or a more elaborate fault-injection rig. Exercise 2 walks through the production-grade error handling, which is where the mid-stream behavior becomes load-bearing.
 
 ## A note on `litellm` and similar libraries
 
-If you have looked at the agent ecosystem, you have probably seen `litellm` [24] — a Python library whose entire job is to be the abstraction we just wrote, but for a hundred providers instead of two. You can use it, and many production agents do.
+If you have looked at the agent ecosystem, you have probably seen `litellm` [24]. This is a Python library whose entire job is to be the abstraction we just wrote, but for a hundred providers instead of two. You can use it, and many production agents do.
 
 We chose not to, for two reasons.
 
-First, the book's purpose is to understand how agents work. A library that hides every provider under one function call does not teach you the foundational concepts. After this chapter you can read `litellm`'s source code and recognize what it is doing — Exercise 4 walks through that mapping.
+First, the book's purpose is to understand how agents work. A library that hides every provider under one function call does not teach you the foundational concepts. After this chapter you can read `litellm`'s source code and recognize what it is doing and Exercise 4 walks through that mapping.
 
-Second, and more important: in the real world, every provider library leaks. The leaks happen most often around *tool calls*, especially streaming tool calls (Chapter 7). The reason is structural. OpenAI streams a tool call by accumulating a JSON-string `arguments` field across many delta chunks — the model emits `{"loc` then `ation":"S` then `F"}` and the SDK reassembles. Anthropic streams the equivalent as a `tool_use` content block with typed `input_json_delta` events, then a `message_delta` with the final `stop_reason`. A library that wants to look like OpenAI to its callers has to either translate Anthropic's typed deltas into a fake JSON-string accumulator (losing the type information that made Anthropic's stream useful) or expose a leaky union type that callers have to unpack themselves. Both happen, and both are sources of bugs that production agents eventually hit and have to patch around.
+Second, and more important: in the real world, every provider library leaks. The leaks happen most often around tool calls, especially streaming tool calls (Chapter 7). The reason is structural: OpenAI streams a tool call by accumulating a JSON-string `arguments` field across many delta chunks — the model emits `{"loc` then `ation":"S` then `F"}` and the SDK reassembles. Anthropic streams the equivalent as a `tool_use` content block with typed `input_json_delta` events, then a `message_delta` with the final `stop_reason`. A library that wants to look like OpenAI to its callers has to either translate Anthropic's typed deltas into a fake JSON-string accumulator (losing the type information that made Anthropic's stream useful) or expose a leaky union type that callers have to unpack themselves. Both happen, and both are sources of bugs that production agents eventually hit and have to patch around.
 
-Nanobot specifically dropped `litellm` in March 2026, in commit `3dfdab7` [25]: "Remove litellm dependency entirely (supply chain risk mitigation) … 593 tests passed, net -1034 lines." The supply-chain note matters — earlier commit `38ce054` had pinned the version after a security advisory — but the line count is the structural story. Replacing a 100-provider library with two native SDKs *removed* a thousand lines of code, because almost all of the litellm-related code was workarounds for the abstraction's leaks.
+Nanobot specifically dropped `litellm` in March 2026, in commit `3dfdab7` [25]: "Remove litellm dependency entirely (supply chain risk mitigation) … 593 tests passed, net -1034 lines." The supply-chain note matters — earlier commit `38ce054` had pinned the version after a security advisory but but the line count is the structural story. Replacing a 100-provider library with two native SDKs in fact removed a thousand lines of code, because almost all of the litellm-related code was workarounds for the abstraction's leaks.
 
-The proposal that led to that commit [26] is worth reading in full if you are picking between a meta-library and rolling your own provider layer. Three threads of argument run through the discussion.
+The proposal that led to that commit [26] is worth reading in full if you are picking between a meta-library and rolling your own provider layer. Some of the main points that run through the discussion.
 
-**Dependency weight versus project philosophy.** Nanobot is around 4,000 lines of code total — its identity is "ultra-lightweight." Pulling in a roughly 30 MB dependency that supports 126 providers most users never touch is structurally heavier than the project itself. The three native SDKs nanobot actually needs (Anthropic, OpenAI, Google) weigh about 5 MB combined. The 6× size delta is not the headline on its own; the headline is the misalignment between a heavyweight abstraction and a lightweight project. If your project is large to begin with, this argument has less weight; if your project is small, an outsized dependency is a smell.
+**Dependency weight versus project philosophy.** Nanobot is around 4,000 lines of code total and its identity is "ultra-lightweight." Pulling in a roughly 30 MB dependency that supports 126 providers most users never touch is structurally heavier than the project itself. The three native SDKs nanobot actually needs (Anthropic, OpenAI, Google) weigh about 5 MB combined.
 
-**Transparency and debuggability.** With native SDKs, errors come out of the SDK directly and map to documented HTTP responses you can look up. With `litellm` in the path, users were hitting Pydantic serialization warnings that did not correspond to anything the underlying provider had returned — by the time the warning surfaced, the abstraction had already transformed both the request and the response, and the user had no leverage on what to fix. "Fully visible" code, in the proposal's phrasing, beats a black box that mediates the contract.
+**Transparency and debuggability.** With native SDKs, errors come out of the SDK directly and map to documented HTTP responses you can look up. With `litellm` in the path, users were hitting Pydantic serialization warnings that did not correspond to anything the underlying provider had returned and by the time the warning surfaced, the abstraction had already transformed both the request and the response, and the user had no leverage on what to fix. "Fully visible" code, in the proposal's phrasing, beats a black box that mediates the contract.
 
-**Provider-specific feature access.** This is the same leak we already covered from the other direction (the Anthropic-via-OpenAI-SDK section earlier in the chapter): when a translation layer normalizes everything to the lowest common denominator, provider-specific features — extended thinking, prompt caching, citations — end up either dropped or grafted on as extensions that defeat the abstraction's purpose. Talking to each SDK directly is what keeps those features first-class. For a chapter that just spent its entire previous installment caching the system prompt, this argument is load-bearing.
+**Provider-specific feature access.** This is the same leak we already covered from the other direction (the Anthropic-via-OpenAI-SDK section earlier in the chapter): when a translation layer normalizes everything to the lowest common denominator, provider-specific features — extended thinking, prompt caching, citations — end up either dropped or grafted on as extensions that defeat the abstraction's purpose. Talking to each SDK directly is what keeps those features first-class. 
 
-The acknowledged tradeoff is provider coverage: `litellm`'s 126 providers down to roughly 50 between native-SDK and OpenAI-compatible support. In practice OpenRouter mitigates most of this, since it fronts hundreds of long-tail models behind a single OpenAI-compatible endpoint that the `OpenAIProvider` you wrote already speaks. The cost of going native is real but bounded.
+The acknowledged tradeoff is provider coverage: `litellm`'s 126 providers down to roughly 50 between native-SDK and OpenAI-compatible support. In practice OpenRouter mitigates most of this, since it fronts hundreds of long-tail models behind a single OpenAI-compatible endpoint that the `OpenAIProvider` you wrote already speaks.
 
 ## Production reference
 
 Open [`nanobot/nanobot/providers/`](https://github.com/HKUDS/nanobot/tree/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers). The structure is recognizably what we just built, with a layer of factory and registry on top:
 
-- **[`base.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py)** — the abstract `Provider` (named [`LLMProvider`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L91) in nanobot, recognizably the same idea).
-- **[`registry.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/registry.py)** and **[`factory.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/factory.py)** — wire up provider construction from configuration files. Our `DEFAULT_PROVIDER = ...` line is the simplest possible version of this; in production you want to declare providers in YAML and let the factory build them.
-- **[`anthropic_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py)** — Anthropic's API. The [`_apply_cache_control()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L379) method is the production version of our single `cache_control={"type": "ephemeral"}` line. It walks the system, messages, and tools lists and places markers at *each* of the four allowed cache breakpoints, so a long tool catalog and a long conversation tail can be cached independently.
-- **[`openai_compat_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/openai_compat_provider.py)** — the catch-all for OpenAI-format endpoints. This single file covers Gemini-via-compat, OpenRouter, Ollama, vLLM, LM Studio, DeepSeek, Mistral, Kimi, and several specific cloud models. Skim its [`chat_stream`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/openai_compat_provider.py#L1199) method — the shape is what we wrote, plus extra handling for tool-call deltas (Chapter 7), cancellation (Chapter 9), and structured event emission (Chapter 22).
+- **[`base.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py)** is the abstract `Provider` (named [`LLMProvider`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L91) in nanobot, recognizably the same idea).
+- **[`registry.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/registry.py)** and **[`factory.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/factory.py)** wire up provider construction from configuration files. Our `DEFAULT_PROVIDER = ...` line is the simplest possible version of this. However, in production you want to declare providers in YAML and let the factory build them.
+- **[`anthropic_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py)** — Anthropic's API. The [`_apply_cache_control()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/anthropic_provider.py#L379) method is the production version of our single `cache_control={"type": "ephemeral"}` line. It walks the system, messages, and tools lists and places markers at each of the four allowed cache breakpoints, so a long tool catalog and a long conversation tail can be cached independently.
+- **[`openai_compat_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/openai_compat_provider.py)** — the catch-all for OpenAI-format endpoints. This single file covers Gemini-via-compat, OpenRouter, Ollama, vLLM, LM Studio, DeepSeek, Mistral, Kimi, and several specific cloud models. Skim its [`chat_stream`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/openai_compat_provider.py#L1199) method. You will notice that the shape is what we wrote, plus extra handling for tool-call deltas (Chapter 7), cancellation (Chapter 9), and structured event emission (Chapter 22).
 - **[`azure_openai_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/azure_openai_provider.py)** and **[`github_copilot_provider.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/github_copilot_provider.py)** — variants of OpenAI-compatible with provider-specific authentication.
-- **[`openai_responses/`](https://github.com/HKUDS/nanobot/tree/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/openai_responses)** — the newer Responses API path; the book does not cover it.
+- **[`openai_responses/`](https://github.com/HKUDS/nanobot/tree/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/openai_responses)** is the newer Responses API path and the book does not cover it.
 
-A couple of production nuances are visible in those files but invisible from our toy:
+A couple of production nuances worth mentioning here:
 
-**Async, with one client per provider.** Nanobot uses `AsyncAnthropic` and `AsyncOpenAI`, with `max_retries=0` on the SDK and a centralized retry policy in [`chat_stream_with_retry()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L527) (in [`base.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py)). The reason for `max_retries=0` is that the SDK's default exponential-backoff retry interacts badly with streaming — retrying a half-delivered stream produces duplicate output. Centralizing retries lets the policy be aware of which streams are mid-flight.
+**Async, with one client per provider.** Nanobot uses `AsyncAnthropic` and `AsyncOpenAI`, with `max_retries=0` on the SDK and a centralized retry policy in [`chat_stream_with_retry()`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py#L527) (in [`base.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/base.py)). The reason for `max_retries=0` is that the SDK's default exponential-backoff retry interacts badly with streaming: retrying a half-delivered stream produces duplicate output. Centralizing retries lets the policy be aware of which streams are mid-flight.
 
-**Idle timeouts on every event.** Each `__anext__()` on the stream is wrapped in `asyncio.wait_for(..., timeout=idle_timeout_s)` (90 seconds by default, controlled by `NANOBOT_STREAM_IDLE_TIMEOUT_S`). A half-open TCP connection can hang the agent indefinitely otherwise — the SDK does not time out on its own.
+**Idle timeouts on every event.** Each `__anext__()` on the stream is wrapped in `asyncio.wait_for(..., timeout=idle_timeout_s)` (90 seconds by default, controlled by `NANOBOT_STREAM_IDLE_TIMEOUT_S`). Without that, a half-open TCP connection can hang the agent indefinitely because the SDK does not time out on its own.
 
 ## Exercises
 

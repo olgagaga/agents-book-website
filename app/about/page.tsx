@@ -40,7 +40,10 @@ export default function About() {
           <strong>Olga Kuzmich</strong> is pursuing a combined BS/MS program at
           Johns Hopkins University in Applied Mathematics and Data Science. She
           wrote this book because it is the one she wished existed when she set
-          out to understand how AI agents actually work.
+          out to understand how AI agents actually work. This book grows out of
+          a simple conviction: the engineering behind a capable agent is far
+          less magical than it looks, and anyone willing to build it one piece
+          at a time can understand the whole thing.
         </p>
 
         <p>
@@ -61,15 +64,9 @@ export default function About() {
           . Her previous research spans clinical predictive modeling and
           computer vision, with work appearing in venues including{" "}
           <em>Open Forum Infectious Diseases</em> and <em>NeurIPS</em>.
-        </p>
-
-        <p>
           She is a RISE Global Winner — a Schmidt Futures and Rhodes Trust
           program that selected roughly 100 people from some 80,000 applicants —
-          and her early work has been covered by IEEE Entrepreneurship. This
-          book grows out of a simple conviction: the engineering behind a
-          capable agent is far less magical than it looks, and anyone willing to
-          build it one piece at a time can understand the whole thing.
+          and her early work has been covered by IEEE Entrepreneurship.
         </p>
 
         <p>She loves oranges, cornflowers, and sparkling water.</p>

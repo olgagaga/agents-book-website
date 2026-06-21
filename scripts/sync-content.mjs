@@ -19,6 +19,9 @@ const FILES = [
   "ch3-context.md",
   "ch4-streaming.md",
   "ch5-providers.md",
+  "ch6-loop.md",
+  "ch7-tools.md",
+  "ch8-observation.md",
 ];
 
 if (!fs.existsSync(BOOK_DIR)) {

@@ -1,6 +1,6 @@
 # AI Agent Engineering — book website
 
-A simple reading site for the first five chapters of *AI Agent Engineering*,
+A simple reading site for the first eight chapters of *AI Agent Engineering*,
 built with Next.js (App Router) and deployed on Vercel.
 
 ## Local development
@@ -14,7 +14,7 @@ npm run dev    # http://localhost:3000
 ## How content works
 
 The chapters live in `../book` (the book project's source of truth).
-`npm run sync` copies the five published chapters into `content/`, driven by the
+`npm run sync` copies the eight published chapters into `content/`, driven by the
 manifest in [`lib/chapters.ts`](lib/chapters.ts). The copied files in `content/`
 are committed so the site builds standalone on Vercel.
 

@@ -12,6 +12,9 @@ export const CHAPTERS = [
   { file: "ch3-context.md", slug: "3-context", title: "The System Prompt and Context Builder" },
   { file: "ch4-streaming.md", slug: "4-streaming", title: "Streaming Responses" },
   { file: "ch5-providers.md", slug: "5-provider-abstraction", title: "Provider Abstraction" },
+  { file: "ch6-loop.md", slug: "6-the-loop", title: "The Loop" },
+  { file: "ch7-tools.md", slug: "7-tool-calling", title: "Tool Calling" },
+  { file: "ch8-observation.md", slug: "8-observation-and-continuation", title: "Observation and Continuation" },
 ] as const;
 
 export type Chapter = (typeof CHAPTERS)[number];

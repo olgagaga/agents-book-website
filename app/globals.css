@@ -170,6 +170,22 @@ html.dark .source-pane .shiki span {
   }
 }
 
+/* Mermaid diagrams (```mermaid blocks rewritten to .mermaid-diagram divs by
+   rehype-mermaid, rendered to SVG client-side by ChapterContent). Render at the
+   SVG's natural size and scroll horizontally if it overflows, rather than
+   letting it shrink to the column width and shrinking the label text with it. */
+.mermaid-diagram {
+  overflow-x: auto;
+  text-align: center;
+  margin: 1.5rem 0;
+}
+.mermaid-diagram svg {
+  max-width: none !important;
+  width: auto !important;
+  height: auto;
+  display: inline-block;
+}
+
 /* Two-theme support: show the right Shiki theme per color mode. */
 html:not(.dark) pre code span {
   color: var(--shiki-light);

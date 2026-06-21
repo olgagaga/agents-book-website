@@ -78,6 +78,65 @@ export default function ChapterContent({ html }: { html: string }) {
     });
   }, [html]);
 
+  // Render ```mermaid blocks (rewritten to `.mermaid-diagram` divs at build
+  // time) into SVG on the client, and re-render them when the theme changes
+  // so colors track light/dark mode.
+  useEffect(() => {
+    const root = ref.current;
+    if (!root) return;
+
+    let cancelled = false;
+
+    async function render() {
+      const nodes = Array.from(
+        root!.querySelectorAll<HTMLElement>(".mermaid-diagram"),
+      );
+      if (!nodes.length) return;
+
+      const mermaid = (await import("mermaid")).default;
+      if (cancelled) return;
+
+      const dark = document.documentElement.classList.contains("dark");
+      mermaid.initialize({
+        startOnLoad: false,
+        theme: dark ? "dark" : "default",
+        securityLevel: "loose", // book-authored content; allows <br/> in labels
+        flowchart: { htmlLabels: true },
+        themeVariables: { fontSize: "16px" },
+      });
+
+      for (const node of nodes) {
+        // Stash the original source once; mermaid replaces the content with
+        // SVG, so a re-render (e.g. on theme toggle) needs the source back.
+        if (node.dataset.src === undefined) {
+          node.dataset.src = node.textContent ?? "";
+        }
+        node.removeAttribute("data-processed");
+        node.textContent = node.dataset.src;
+      }
+
+      try {
+        await mermaid.run({ nodes });
+      } catch {
+        // Leave the raw source visible if a diagram fails to parse.
+      }
+    }
+
+    render();
+
+    // Re-render when the `.dark` class on <html> flips.
+    const observer = new MutationObserver(() => render());
+    observer.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ["class"],
+    });
+
+    return () => {
+      cancelled = true;
+      observer.disconnect();
+    };
+  }, [html]);
+
   return (
     <div
       ref={ref}

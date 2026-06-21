@@ -6,6 +6,7 @@ import rehypeSlug from "rehype-slug";
 import rehypePrettyCode from "rehype-pretty-code";
 import rehypeStringify from "rehype-stringify";
 import rehypeReferences from "./rehype-references";
+import rehypeMermaid from "./rehype-mermaid";
 
 /**
  * Render chapter markdown to an HTML string at build time. Code blocks are
@@ -18,6 +19,7 @@ export async function renderMarkdown(markdown: string): Promise<string> {
     .use(remarkGfm)
     .use(remarkRehype)
     .use(rehypeSlug)
+    .use(rehypeMermaid)
     .use(rehypePrettyCode, {
       theme: { light: "github-light", dark: "github-dark" },
       keepBackground: false,

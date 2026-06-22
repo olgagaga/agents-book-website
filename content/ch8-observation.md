@@ -1,20 +1,18 @@
 # Chapter 8: Observation and Continuation
 
-Chapter 7 finished with a working tool-call loop, streaming restored, and multi-tool turns supported. However, when a tool returns a lot of text — a file's contents, an HTTP response, or a long shell output — that text is included in the conversation, and the *next* iteration sends the whole fragment back to the model, collapsing the context window quickly. The second problem with the current implementation is that `agent_step` discards its scratchpad on every turn, so the model loses sight of its prior tool calls across turn boundaries.
+Chapter 7 finished with a working tool-call loop, streaming restored, and multi-tool turns supported. However, when a tool returns a lot of text — a file's contents, an HTTP response, or a long shell output — that text is included in the conversation, and the next iteration sends the whole fragment back to the model, collapsing the context window quickly. The second problem with the current implementation is that `agent_step` discards its scratchpad on every turn, so the model loses sight of its prior tool calls across turn boundaries.
 
 By the end of this chapter, tool results pass through a size budget before reaching the model, and the long-term `messages` list keeps the full context of previous tool calls.
 
 ## Observations are load-bearing
 
-In the loop, the model's *observation* of the world is whatever string sits in the `content` field of a `{"role": "tool", ...}` message. The model has no other source of truth about what happened when a tool ran. It sees the string the loop wrote, and it reasons forward from there.
-
-Two things follow. First, the string has to clearly describe a tool output, whether it failed or was truncated. The model's plan for the next iteration depends on whether it thinks the previous step succeeded. Second, the string has a budget — every byte of it costs context-window space, both on the request that contains it and on every subsequent request in the same turn.
+In the loop, the model's observation of the world is whatever string sits in the `content` field of a `{"role": "tool", ...}` message. Two things follow. First, the string has to clearly describe a tool output, whether it failed or was truncated. The model's plan for the next iteration depends on whether it thinks the previous step succeeded. Second, the string has a budget: every byte of it costs context-window space, both on the request that contains it and on every subsequent request in the same turn.
 
 The Chapter 7 loop already gets the first part right for the failure case (`f"Error: {type(exc).__name__}: {exc}"`). However, it does not address the budgeting constraints yet.
 
 ## The size problem
 
-Imagine a `read_file` tool of the kind built in Chapter 11. It takes a path and returns the file's contents. A reasonable agent will use it to read a file, decide the file is interesting, and call it again on a related file. A 5,000-line YAML config returns roughly 200 KB of text. The next iteration's request now includes that 200 KB inside the tool-result block, and every subsequent iteration carries it along too.
+Imagine a `read_file` tool that takes a path and returns the file's contents. A reasonable agent will use it to read a file, decide the file is interesting, and call it again on a related file. A 5,000-line YAML config returns roughly 200 KB of text. The next iteration's request now includes that 200 KB inside the tool-result block, and every subsequent iteration carries it along too.
 
 The pattern compounds in three ways at once. *Vertically*, every additional iteration carries every prior tool result. *Horizontally*, a single iteration can have multiple tool calls and therefore multiple result blocks. *Across turns*, if the scratchpad is persisted, every prior turn's results ride along into the next turn's prompt. Without a size budget anywhere, a session that started under 1,000 tokens crosses 100,000 tokens in a few minutes of conversation and then fails the next request with a context-window error.
 
@@ -38,11 +36,11 @@ def _truncate_observation(text: str, max_chars: int = MAX_OBSERVATION_CHARS) -> 
     )
 ```
 
-Notice that the truncation snips the middle and keeps both ends. Tool results often carry useful structure at both ends — a file's imports at the top and its exports at the bottom; a shell command's invocation line at the start and its exit code at the end; an HTTP response's headers at the top and the closing body fragment at the bottom. Throwing away the middle therefore preserves more signal than throwing away the tail. Real systems sometimes do something smarter (token-aware, structure-aware), but middle-snip is the simplest thing that survives almost everything.
+Notice that the truncation snips the middle and keeps both ends. Tool results often carry useful structure at both ends: a file's imports at the top and its exports at the bottom; a shell command's invocation line at the start and its exit code at the end; an HTTP response's headers at the top and the closing body fragment at the bottom. Throwing away the middle therefore preserves more signal than throwing away the tail. 
 
 The marker text — `[...truncated: 4923 characters omitted from the middle...]` — tells the model that what it is seeing is incomplete and that the missing bytes were in the middle. Without that signal, the model treats the truncated text as the whole truth, which can mean confidently citing a non-existent line or claiming a file ends somewhere it does not.
 
-`MAX_OBSERVATION_CHARS = 4000` is a reasonable starting budget — about 1,000 tokens, comfortable inside the input budget of any modern model. Real systems make this configurable per-tool: a `now` result of 30 chars and a `read_file` result of 200 KB do not deserve the same budget. Exercise 1 walks through wiring a per-tool budget onto the `Tool` dataclass, and the production reference shows how nanobot organizes the same idea at scale.
+`MAX_OBSERVATION_CHARS = 4000` is a reasonable starting budget. Real systems make this configurable per-tool: a `now` result of 30 chars and a `read_file` result of 200 KB do not deserve the same budget. Exercise 1 walks through wiring a per-tool budget onto the `Tool` dataclass, and the production reference shows how nanobot organizes the same idea at scale.
 
 Now apply the helper inside the agent loop, before appending the observation to the messages list. Notice the single new line that runs the observation through the helper:
 
@@ -66,13 +64,11 @@ The current error handler is fine for the scale at hand:
 observation = f"Error: {type(exc).__name__}: {exc}"
 ```
 
-It says *what* failed (`KeyError`, `TimeoutError`) and *why* (the exception's message). A capable model handles this well — it apologizes, tries different arguments, or asks the user. The two ways to make it worse are dumping a full Python traceback (overwhelming, mostly noise) or stripping it to `Error.` (the model has no signal to act on).
-
-A couple of error-formatting improvements are worth knowing about even if they are not adopted now: distinguish *non-existent tool* errors from *tool raised exception* errors so the model knows whether to retry the same tool with different arguments or pick a different tool, and add a "did you mean…" hint when a tool name is unknown but a close one exists. Exercise 3 sketches both.
+It says *what* failed (`KeyError`, `TimeoutError`) and *why* (the exception's message). A couple of error-formatting improvements are worth knowing about even if they are not adopted now: distinguish *non-existent tool* errors from *tool raised exception* errors so the model knows whether to retry the same tool with different arguments or pick a different tool, and add a "did you mean…" hint when a tool name is unknown but a close one exists. Exercise 3 sketches both.
 
 ## Continuation across turns
 
-The other Chapter 7 fragility was the one named at the top: `agent_step` discards its intermediate scratchpad on every turn, so only the user's prompt and the final reply ever land in the long-term history. The fix here is to change where the scratchpad lives.
+The other Chapter 7 fragility was that the agent discards its intermediate scratchpad on every turn, so only the user's prompt and the final reply ever land in the long-term history. The fix here is to change where the scratchpad lives.
 
 To see what gets thrown away, look at the Chapter 7 `agent_step` shape. The first line copies the caller's history into a local `messages` list; the loop appends freely to that copy — user prompt, assistant tool-call messages, synthetic tool-result observations, intermediate assistant text — but only `reply.text` ever leaves the function:
 
@@ -94,11 +90,9 @@ messages.append({"role": "user", "content": user_input})
 messages.append({"role": "assistant", "content": reply})
 ```
 
-Notice that the running `messages` list in `chat()` never receives any of the intermediate scratchpad — no tool calls, no observations. Chapter 6's "What carries between turns" section walked through this trade-off and accepted it on the grounds that the scratchpad was cheap to discard. This chapter changes that bet: the model is about to see its earlier tool calls across turns, and the truncation helper from the previous section is what keeps the cost survivable.
+The scratchpad has to outlive a single call to `agent_step`. The simplest way to make that happen is to stop copying the caller's list and instead mutate it in place — which is a real change of ownership: in Chapter 7, `chat()` was the sole writer of `messages` and `agent_step` worked on a private copy; from here on, `agent_step` is the writer and `chat()` only reads. Also, since `chat()` is no longer responsible for appending anything to `messages`, `agent_step` has to append the final assistant text itself, immediately before returning.
 
-Two design choices drive the rewrite. *First*, the scratchpad has to outlive a single call to `agent_step`. The simplest way to make that happen is to stop copying the caller's list and instead mutate it in place — which is a real change of ownership: in Chapter 7, `chat()` was the sole writer of `messages` and `agent_step` worked on a private copy; from here on, `agent_step` is the writer and `chat()` only reads. *Second*, since `chat()` is no longer responsible for appending anything to `messages`, `agent_step` has to append the final assistant text itself, immediately before returning — otherwise that final reply never lands in the conversation at all.
-
-The parameter `history` becomes `messages`, because it is no longer a read-only input to copy from. The `messages = list(history)` copy at the top is gone. And a fresh `messages.append({"role": "assistant", "content": reply.text})` runs on the path that exits the loop. The function still returns the text — handy for the caller that wants to log a transcript — but the mutation is what makes the change durable. (The `[iter]` development print added in Chapter 7's worked example is also gone; it served its purpose.)
+The parameter `history` becomes `messages`, because it is no longer a read-only input to copy from. The `messages = list(history)` copy at the top is gone. And a fresh `messages.append({"role": "assistant", "content": reply.text})` runs on the path that exits the loop. The function still returns the text — handy for the caller that wants to log a transcript — but the mutation is what makes the change durable. (The `[iter]` development print added in Chapter 7's worked example is also gone)
 
 ```python
 def agent_step(
@@ -124,7 +118,7 @@ def agent_step(
         # --- tool calls handling ---
 ```
 
-The flip side of `agent_step` taking ownership is that `chat()` has to *stop* appending. If it kept its old two-line bookkeeping after the call, every turn would record the user prompt twice and the final assistant text twice — once from inside `agent_step`, once from `chat()` after the return — and the doubled messages would feed straight back to the model on the next turn. The fix is to drop both appends and let the return value go unused:
+Now drop both appends in `chat()` and let the return value go unused:
 
 ```python
 def chat(provider: Provider | None = None) -> None:
@@ -162,9 +156,9 @@ Compare this with the Chapter 7 trace: in that loop, the second turn had no reco
 
 ## The cost: context window pressure
 
-Carrying the scratchpad is not free. Each turn now appends one user message, one assistant message per iteration, and one tool result per tool call. A six-turn conversation with one tool call per turn lands at roughly 24 messages, plus the system prompt — call it 8,000 tokens of tail. Most of that is fine; the input budget on a current Claude or GPT model is comfortably six figures of tokens [1][2]. But the budget is not infinite, and a session that runs for hours, calls many tools, or includes a single large tool result will eventually pressure it.
+Each turn now appends one user message, one assistant message per iteration, and one tool result per tool call. A six-turn conversation with one tool call per turn lands at roughly 24 messages, plus the system prompt — call it 8,000 tokens of tail. Most of that is fine; the input budget on a current Claude or GPT model is comfortably six figures of tokens [1][2]. 
 
-A pair of pressure-relief mechanisms are out of scope for this chapter, each getting its own treatment later in the book. *Token-aware truncation* — counting tokens instead of characters, applying budgets per-tool, dropping fields the model does not need — is the small-scale fix; the production version is sketched below. *Consolidation* — summarizing older parts of the conversation into a shorter prose digest — is the large-scale fix, and it is what Chapter 16 builds. Until then, treat the budget arithmetic as a thing to watch; if a long session starts producing context-window errors, the first thing to look at is how much of the message tail is stale tool output.
+A pair of pressure-relief mechanisms are out of scope for this chapter, each getting its own treatment later in the book. The first on is token-aware truncation: counting tokens instead of characters, applying budgets per-tool, dropping fields the model does not need. In addition to that, consolidation — summarizing older parts of the conversation into a shorter prose digest — is the large-scale fix, and it is what Chapter 16 builds. 
 
 ## Production reference
 

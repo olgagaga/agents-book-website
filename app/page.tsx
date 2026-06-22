@@ -68,7 +68,7 @@ export default function Home() {
           ))}
         </ol>
         <p className="mt-8 text-sm" style={{ color: "var(--muted)" }}>
-          The first five chapters are published here. More are on the way.
+          The first eight chapters are published here. More are on the way.
         </p>
       </section>
 
@@ -89,11 +89,7 @@ export default function Home() {
           >
             nanobot
           </a>
-          , an open-source personal AI agent. The book pins one specific snapshot
-          so the file and function names it cites stay accurate: commit{" "}
-          <code>28f9bbf</code> (28 Apr 2026).
-        </p>
-        <p className="mt-3 text-sm leading-relaxed" style={{ color: "var(--muted)" }}>
+          , an open-source personal AI agent. 
           nanobot is under active development, so if a section the book references
           has since changed upstream, you can always read the exact version the
           book is describing at the pinned commit:

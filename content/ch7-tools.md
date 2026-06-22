@@ -1,6 +1,8 @@
 # Chapter 7: Tool Calling
 
-Chapter 6's `loop.py` is a working agent — it thinks, acts, observes, and stops — but the wire format is text: the model writes JSON inside its reply, the loop parses it, and streaming has to come off because there is no way to decide what kind of reply is coming until it ends. Production agents do not work that way. By the end of this chapter, the JSON parser is gone, the loop streams the model's text live to the user as it arrives, and a single iteration can dispatch multiple tools at once. The change is built on the providers' native *tool-call APIs* — the structured slot every modern LLM has for "I want to do something." A new `agent/tools/` package holds the tool registry; `Provider` grows a structured return type, `Reply`, carrying text and tool calls side by side; `loop.py` shrinks. The shape of the agent loop itself does not change.
+Chapter 6's `loop.py` is a working agent  but the wire format is text: the model writes JSON inside its reply, the loop parses it, and streaming has to come off because there is no way to decide what kind of reply is coming until it ends.
+
+By the end of this chapter, the loop streams the model's text live to the user as it arrives, and a single iteration can dispatch multiple tools at once with native tool API. 
 
 ## Anatomy of native tool calling
 
@@ -22,7 +24,7 @@ client.messages.create(
 )
 ```
 
-When the model wants to call a tool, the response's `content` is a list with one or more *content blocks*. Some are `{"type": "text", ...}` and others are a tool call in a `{"type": "tool_use", ...}` block with an `id`, a `name`, and the actual arguments under `input` — already parsed from JSON, conforming to the declared `input_schema`. The result sent back goes inside the next user message as a `{"type": "tool_result", "tool_use_id": ..., "content": ...}` block.
+When the model wants to call a tool, the response's `content` is a list with one or more content blocks, each of type "text" or  "tool_use". The result sent back goes inside the next user message as a `{"type": "tool_result", "tool_use_id": ..., "content": ...}` block.
 
 OpenAI employs a similar approach. Tools go under `tools` with a `"type": "function"` wrapper:
 
@@ -41,9 +43,9 @@ client.chat.completions.create(
 )
 ```
 
-Tool calls come back on `message.tool_calls` — a list of objects with `id`, `function.name`, and `function.arguments` (a JSON *string* that has to be parsed). Results come back as a separate message with `role="tool"` and a matching `tool_call_id`.
+Tool calls come back on `message.tool_calls` as a list of objects with `id`, `function.name`, and `function.arguments` (a JSON string that has to be parsed). Results come back as a separate message with `role="tool"` and a matching `tool_call_id`.
 
-Notice that the JSON Schema body is identical across providers: both use the standard `type` / `properties` / `required` vocabulary [3]. Both providers also give the model a *separate channel* for tool calls. The model is fine-tuned to fill that channel, and the API returns its contents as a structured field. The whole class of parsing failures from Chapter 6 — markdown fences wrapped around JSON, leading whitespace, the model improvising prose where structure was required — simply cannot happen at this layer.
+Notice that the JSON Schema body is identical across providers: both use the standard `type` / `properties` / `required` vocabulary [3]. Both providers also give the model a separate channel for tool calls. 
 
 ## Defining tools
 
@@ -62,9 +64,9 @@ class Tool:
     run: Callable[[dict], str]
 ```
 
-`@dataclass` is the standard library's way to declare a typed record without writing `__init__`, `__repr__`, and `__eq__` by hand — `Tool(name=..., description=..., schema=..., run=_now)` just works. A plain `dict` would be tempting but the typing is too loose: a typo like `tool["nmae"]` only surfaces at runtime, and an editor cannot autocomplete fields it does not know about. The dataclass is the smallest cure for both, and the same pattern will carry the rest of the book's small typed bundles.
+`@dataclass` is the standard library's way to declare a typed record without writing `__init__`, `__repr__`, and `__eq__` by hand. A plain `dict` would be tempting but the typing is too loose: a typo like `tool["nmae"]` only surfaces at runtime, and an editor cannot autocomplete fields it does not know about. 
 
-Each `Tool` carries four pieces: a name, a description that the model reads to decide whether to call it, an *input schema* (JSON Schema describing the arguments object), and a callable that takes the parsed arguments and returns a string. The string return is deliberate. Whatever the tool produces ultimately has to land inside a chat message, and chat messages are strings on the wire; returning a string sidesteps any serialization step between the tool and the conversation. Richer return shapes (multimodal results, structured data) stay out of scope for now.
+Each `Tool` carries four pieces: a name, a description that the model reads to decide whether to call it, an input schema (JSON Schema describing the arguments object), and a callable that takes the parsed arguments and returns a string. The string return is deliberate. Whatever the tool produces ultimately has to land inside a chat message, and chat messages are strings on the wire.
 
 The tools from Chapter 6's main text and Exercise 1 can now be defined in `tools.py`:
 
@@ -108,22 +110,18 @@ TOOLS: list[Tool] = [
 
 ```
 
-A small `find_tool` lookup helper rounds out the registry. When the loop sees `reply.tool_calls = [ToolCall(name="wordcount", ...)]` and needs to actually run something, it has to turn that name back into the `Tool` object whose `run` callable to invoke. The registry is small enough that a linear scan is fine — no index, no dict:
+A small `find_tool` lookup helper rounds out the registry. When the loop sees `reply.tool_calls = [ToolCall(name="wordcount", ...)]` and needs to actually run something, it has to turn that name back into the `Tool` object whose `run` callable to invoke. The registry is small enough that a linear scan is fine for now:
 
 ```python
 def find_tool(name: str) -> Tool | None:
     return next((t for t in TOOLS if t.name == name), None)
 ```
 
-The `schema` field is the JSON Schema description of each tool's arguments. It tells the model what fields are allowed, which are required, and what types each one expects; the provider passes it through to the model, and the model validates its own arguments against it before emitting a tool call.
-
 With this setup, `loop.py` can be cleaned up: drop `TOOL_INSTRUCTIONS`, drop the in-file `TOOLS` registry, drop `_parse_tool_call` and `_build_agent_system`. The provider will declare tools to the model directly, on the same wire format the model was trained to fill [1][2].
-
-Three practical benefits follow. *Robustness*: the whole family of free-text parsing failures Chapter 6's parser had to tolerate cannot happen here, because the model is no longer asked to emit JSON in a free-text channel. *Schema enforcement*: tool arguments arrive already parsed against the declared JSON Schema, so a `wordcount` tool can trust that `args["text"]` is a string (and that the field is present at all). *Conversation hygiene*: tool calls and results live in their own structured slots rather than masquerading as user or assistant text, so the conversation sent back on the next iteration mirrors the real exchange instead of a synthetic transcript with `<observation>...</observation>` tags stuffed into user turns.
 
 ## A new shape for the Provider
 
-Currently, `Provider.stream` returns an `Iterator[str]` that yields text deltas, one after another. With native tool calls, a reply has two parts — the text the model produced and the tool calls (zero, one, or several) it wants run — so the return type has to carry both. In `agent/providers/base.py`, two small dataclasses cover it:
+Chapter 5's `Provider.stream` returns an `Iterator[str]` of text deltas. That no longer fits: a reply can now carry tool calls alongside its text, so the provider needs a return type that holds both. Two small dataclasses in `agent/providers/base.py` cover it:
 
 ```python
 from dataclasses import dataclass, field
@@ -142,15 +140,11 @@ class Reply:
     tool_calls: list[ToolCall] = field(default_factory=list)
 ```
 
-`Reply.text` is the full assistant text concatenated. `Reply.tool_calls` is the list of structured calls the model wants executed; an empty list means "the model is done, this is the final answer."
+`Reply.text` is the full assistant text concatenated; `Reply.tool_calls` is the list of structured calls the model wants executed, empty when the model is done.
 
-Before showing the new abstract method, two design choices are worth naming explicitly because the rest of the chapter depends on them.
+Returning a single `Reply` forces one more change: streaming has to move out of the return type. Chapter 5 returned an `Iterator[str]` and let the caller pull text chunks out, but a `Reply` can only be handed back once the model has finished — that is the only moment its `tool_calls` list fully exists. To keep text flowing live in the meantime, `call` takes an `on_text_delta` callback: as each delta arrives off the wire, `on_text_delta(delta)` fires and the caller prints it immediately. A caller that only wants the final structured reply passes `None`, and the callback is skipped.
 
-First, the *internal* message format passed into `Provider.call` is OpenAI-shape: a flat list of `{"role": ..., "content": ...}` dicts, with assistant messages optionally carrying a `tool_calls` list and a `role="tool"` dict per result. Anthropic's content-block shape could have been picked instead, or a third one invented. Picking one provider's shape as the lingua franca is the same trade-off `litellm` makes (see Chapter 5's aside): the loop stays simple and provider-agnostic, at the cost of a small translation layer inside every non-OpenAI provider. That cost is paid once, in `AnthropicProvider`, and it stops there.
-
-Second, streaming moves from the return type to a *callback*. Where Chapter 5 returned an `Iterator[str]` and let the caller pull text chunks out, the new shape returns a single `Reply` at the end and delivers text deltas as a side effect through an `on_text_delta` callback along the way. The reason is that with tool calls in the picture, a return value now has to carry text *and* a structured `tool_calls` list, which only fully exists when the model is done. The callback preserves the live-streaming experience anyway: as each text delta arrives off the wire, `on_text_delta(delta)` fires, and a caller can use that hook to print the chunk to the terminal in real time. A caller that doesn't care about live text — say, an internal loop that just wants the final structured reply — passes `None` and the callback is skipped.
-
-With those two decisions out of the way, the abstract method is short:
+The messages flowing into `call` stay in the flat OpenAI shape from Chapter 5 — a list of `{"role": ..., "content": ...}` dicts — which keeps the loop provider-agnostic and pushes any format translation into the providers themselves. With the return type and the streaming callback settled, the abstract method is short:
 
 ```python
 from typing import Callable
@@ -176,20 +170,16 @@ class Provider(ABC):
         ...
 ```
 
-The minimum useful callback is `lambda d: print(d, end="", flush=True)` — it writes the delta directly to stdout without inserting newlines. Exactly that gets wired from `chat()` at the end of the chapter.
-
 
 ## AnthropicProvider with tools
 
-`AnthropicProvider` is where the design choices just made show their cost. The loop hands the provider a flat OpenAI-shape `messages` list — `role` plus `content`, with optional `tool_calls` on assistant messages and a `role="tool"` per tool result. Anthropic's API expects something different: assistant messages are a *list of content blocks* that interleave `text` and `tool_use`, and tool results come back inside a *user* message as a `tool_result` block. The two layouts describe the same conversation, but the wire shape is different enough to need a translator.
+Anthropic's API does not accept the shape we defined earlier. Instead, assistant messages must be a list of content blocks interleaving `text` and `tool_use`, and tool results come back inside a user message as a `tool_result` block. 
 
-The provider therefore has two distinct jobs, built up in two reveals. First, a stateless translation layer — `_to_anthropic_messages` for conversation history and `_to_anthropic_tools` for the tool registry — that maps the internal shape into Anthropic's. Then the streaming `call` method, which submits the translated request and reassembles a single `Reply` from Anthropic's event-based response stream.
+Therefore, provider must first serve as a translation layer and then submit the translated request and reassemble  a single `Reply` from Anthropic's event-based response stream.
 
 ### Translation
 
-The `messages` list that arrives at `provider.call` is the running conversation the loop has built up over previous iterations. A fresh user turn passes in something short — `[{"role": "user", "content": "what time is it?"}]`. After one tool call has gone around, the list has grown to three entries: the user prompt, an assistant message with both `content` text and a `tool_calls` list, and a `role="tool"` entry carrying the observation fed back. The loop is the sole writer of this list (the rewrite of `loop.py` later in the chapter shows exactly where each entry is appended), which is what guarantees the shape: every `ToolCall` was originally constructed by a provider from a stream, so `id`, `name`, and `args` are always present.
-
-The job of `_to_anthropic_messages` is to walk that list and rewrite each entry in the shape Anthropic expects, dispatching on `m["role"]`:
+The `messages` list that arrives at `provider.call` is the running conversation the loop has built up over previous iterations. The job of `_to_anthropic_messages` is to walk that list and rewrite each entry in the shape Anthropic expects, dispatching on `m["role"]`:
 
 ```python
 class AnthropicProvider(Provider):
@@ -250,7 +240,7 @@ class AnthropicProvider(Provider):
                 pass
 ```
 
-Finally, `role="tool"` is a wire-format invention of OpenAI that Anthropic does not share. In Anthropic's world, tool results ride back as a `tool_result` content block inside the *next* user message. The translation flips the role from `tool` to `user`, wraps the observation in a `tool_result` block, and threads the matching `tool_use_id` through so Anthropic can pair the result with the original call:
+Finally, `role="tool"` is a wire-format invention of OpenAI that Anthropic does not share. In Anthropic's world, tool results ride back as a `tool_result` content block inside the next user message. The translation flips the role from `tool` to `user`, wraps the observation in a `tool_result` block, and threads the matching `tool_use_id` through so Anthropic can pair the result with the original call:
 
 ```python
 class AnthropicProvider(Provider):
@@ -282,7 +272,7 @@ class AnthropicProvider(Provider):
         return out
 ```
 
-Tool definitions need translation too, for a simpler reason: the `Tool` dataclass is provider-neutral, with a generic `schema` field that each provider's API wants to receive under a different name. Anthropic uses `input_schema`, sitting at the top level of the tool entry. The translation is one rename:
+Tool definitions need translation too, for a simpler reason: the `Tool` dataclass is provider-neutral, with a generic `schema` field that each provider's API wants to receive under a different name. Anthropic uses `input_schema`, sitting at the top level of the tool entry:
 
 ```python
 from tools.base import Tool
@@ -301,9 +291,9 @@ class AnthropicProvider(Provider):
 
 ### Streaming
 
-With translation done, the actual `call` method comes next. The rename from `stream` to `call` is intentional: in Chapter 5 the method returned an iterator of text deltas, so `stream` was an accurate name. Here the method returns a structured `Reply` at the end and merely *delivers* text deltas through `on_text_delta` along the way; `call` better matches that shape.
+With translation done, the actual `call` method comes next. The rename from `stream` to `call` is intentional: in Chapter 5 the method returned an iterator of text deltas, so `stream` was an accurate name. Here the method returns a structured `Reply` at the end and merely delivers text deltas through `on_text_delta` along the way.
 
-Anthropic's streaming API is event-based [1]. Instead of yielding plain text fragments, the SDK iterator yields *typed events* describing what is happening on the wire: a new content block starting, a delta inside the current block, a block ending, the message finishing, usage data arriving, and so on. Of all of these, this chapter cares about exactly two:
+Anthropic's streaming API is event-based [1]. Instead of yielding plain text fragments, the SDK iterator yields typed events describing what is happening on the wire: a new content block starting, a delta inside the current block, a block ending, the message finishing, usage data arriving, and so on. Of all of these, this chapter cares about exactly two:
 
 - `content_block_start` — fires once at the beginning of each new content block. For `tool_use` blocks, this is where the tool's `id` and `name` arrive (the arguments come later, as deltas). Text blocks need no setup at this event.
 - `content_block_delta` — fires for the streamed contents of an in-progress block. Two flavors of delta are relevant here: `text_delta` (a chunk of assistant text) and `input_json_delta` (a fragment of a tool's argument JSON).
@@ -353,7 +343,7 @@ class AnthropicProvider(Provider):
         }
 ```
 
-Then, if a system prompt is set, it is passed through with a `cache_control` marker so Anthropic caches the prefix between turns — the same money-saving trick Chapter 5 introduced. Tools, if any, are translated through `_to_anthropic_tools`:
+Then, if a system prompt is set, it is passed through with a `cache_control` marker so Anthropic caches the prefix between turns — the same prompt-caching technique Chapter 5 introduced. Tools, if any, are translated through `_to_anthropic_tools`:
 
 ```python
 class AnthropicProvider(Provider):
@@ -428,7 +418,7 @@ class AnthropicProvider(Provider):
 
 ```
 
-On `content_block_start` the only action happens when the new block is a `tool_use` — that is the one event where Anthropic ships the tool's `id` and `name`. The handler seeds `tc_by_index` at the block's index with a `ToolCall` carrying that id and name, and prepares an empty string in `partial_args` for the upcoming JSON fragments. Text blocks need no setup at this event; their content shows up only as deltas:
+On `content_block_start` the only action happens when the new block is a `tool_use` — that is the one event where Anthropic ships the tool's `id` and `name`. The handler seeds `tc_by_index` at the block's index with a `ToolCall` carrying that id and name, and prepares an empty string in `partial_args` for the upcoming JSON fragments:
 
 ```python
 from providers.base import Provider, Reply, ToolCall
@@ -462,7 +452,7 @@ class AnthropicProvider(Provider):
 
 ```
 
-On `content_block_delta` the two delta types that matter are `text_delta` and `input_json_delta`. Text deltas get appended to `text_parts` *and* forwarded to `on_text_delta` immediately, so the caller can stream them to the terminal as they arrive. JSON deltas get concatenated into the right `partial_args` slot, addressed by the same `event.index` that identified the matching `tool_use` block at start-time:
+On `content_block_delta` the two delta types that matter are `text_delta` and `input_json_delta`. Text deltas get appended to `text_parts` and forwarded to `on_text_delta` immediately, so the caller can stream them to the terminal as they arrive. JSON deltas get concatenated into the right `partial_args` slot, addressed by the same `event.index` that identified the matching `tool_use` block at start-time:
 
 
 ```python
@@ -503,7 +493,7 @@ class AnthropicProvider(Provider):
 
 ```
 
-After the stream finishes, every `partial_args` slot holds the complete JSON string for one tool call. Each one is parsed and assigned to the matching `ToolCall.args`, defaulting to `{}` when the model produced no fragments at all (the `now` tool, which takes no arguments, looks exactly like this). The final `Reply` is then assembled from the joined text and the list of accumulated tool calls:
+After the stream finishes, every `partial_args` slot holds the complete JSON string for one tool call. Each one is parsed and assigned to the matching `ToolCall.args`, defaulting to `{}` when the model produced no fragments at all. The final `Reply` is then assembled from the joined text and the list of accumulated tool calls:
 
 ```python
 import json
@@ -533,11 +523,11 @@ class AnthropicProvider(Provider):
         return Reply(text="".join(text_parts), tool_calls=list(tc_by_index.values()))
 ```
 
-Stepping back, the event loop itself does very little real work — about thirty lines, with two event branches over a small amount of accumulated state. The careful state design is doing the heavy lifting: text streams out the moment it arrives, tool-call ids land at block-start time, argument JSON accumulates as it streams, and the final parse happens exactly once per tool call after the whole thing has arrived. The streaming the loop lost in Chapter 6 is restored at no additional cost — every `text_delta` event is forwarded through `on_text_delta` immediately, so a caller printing each delta sees the model talk character by character.
+The streaming the loop lost in Chapter 6 is restored: every `text_delta` event is forwarded through `on_text_delta` the moment it arrives, so a caller printing each delta sees the model's output live.
 
 ## OpenAIProvider with tools
 
-The internal message format already *is* OpenAI shape — `role` plus `content` plus optional `tool_calls` — so there is no message-level translation work to do here. The only translation is on tools (rename `schema` to `parameters` and wrap the entry in a `{"type": "function", ...}` envelope), and on the streamed tool-call arguments, which arrive as JSON fragments rather than as a finished object. That fragment-streaming behaviour is the same as Anthropic's, and for the same reason: the model emits its output token by token, and a multi-character JSON string is just more tokens to stream.
+The internal message format already is OpenAI shape — `role` plus `content` plus optional `tool_calls` — so there is no message-level translation work to do here. The only translation is on tools (rename `schema` to `parameters` and wrap the entry in a `{"type": "function", ...}` envelope), and on the streamed tool-call arguments, which arrive as JSON fragments rather than as a finished object — the same fragment-streaming behaviour as Anthropic's, for the same reason.
 
 First, the tool translation:
 
@@ -763,9 +753,7 @@ def agent_step(
 
 Compared to Chapter 6, the model's intent now lives in `reply.tool_calls` directly, with no parsing on the loop's side. The for-loop over `reply.tool_calls` runs each tool the model requested and appends matching `role="tool"` messages back into the conversation; the provider takes care of translating those back to its native wire format inside `call`.
 
-The robustness story is worth pausing on, because in the early days of agent frameworks it mattered a lot — and for smaller or self-hosted models it still does. A parser-based design like Chapter 6's had to tolerate a long tail of model misbehaviors: a markdown fence around the JSON (` ```json ... ``` `), a polite preamble in front of it ("Sure, I'll call the tool:"), single quotes instead of double, two JSON objects when one was asked for, the model invoking a tool name with the trailing parens (`now()`) it was trained to write in Python contexts. Each of those was solvable with a more permissive parser; each more-permissive parser admitted more false positives, where ordinary prose with a stray `{` got treated as a malformed tool call. The native-tool-call path collapses the entire negotiation into a single structured channel that the model is fine-tuned to fill and the API exposes as parsed fields. The class of bugs that used to consume whole afternoons just stops existing.
-
-With `_build_agent_system()` removed — the model no longer needs to be told *how* to call tools in prose, only *which* tools exist — `chat()` in `main.py` changes to call the plain `build_context()` from Chapter 3 directly:
+With `_build_agent_system()` removed — the model no longer needs to be told how to call tools in prose, only which tools exist — `chat()` in `main.py` changes to call the plain `build_context()` from Chapter 3 directly:
 
 ```python
 from loop import agent_step
@@ -779,7 +767,7 @@ def chat(provider: Provider | None = None) -> None:
 
 ## Wiring `chat()` with streaming
 
-Chapter 6 disabled streaming in `chat()` because the loop could not tell whether a reply was a tool call or a final answer until the whole reply had arrived — and a half-streamed JSON tool call printed live to the terminal would have been worse than no streaming at all. Native tool calls fix that at the wire-format layer: text and tool-use blocks are different events from the first byte, so text can stream the moment it arrives with no risk of accidentally streaming a JSON tool call by mistake. Restoring live output means the user sees the model "thinking out loud" between tool calls instead of watching an empty terminal until an iteration finishes:
+Chapter 6 disabled streaming in `chat()` because the loop could not tell whether a reply was a tool call or a final answer until the whole reply had arrived — and a half-streamed JSON tool call printed live to the terminal would have been worse than no streaming at all. Native tool calls fix that at the wire-format layer: text and tool-use blocks are different events from the first byte, so text can stream the moment it arrives with no risk of accidentally streaming a JSON tool call by mistake:
 
 ```python
 def chat(provider: Provider | None = None) -> None:
@@ -798,9 +786,9 @@ def chat(provider: Provider | None = None) -> None:
         # --- append messages to a message history ---
 ```
 
-`on_text_delta=lambda delta: print(...)` is the missing piece — the actual sink that turns each delta into a printed character. The callback's role, foreshadowed when it was introduced on the abstract `Provider`, finally has a concrete caller. Anything the model says — preamble before a tool call, the final answer after — streams to the terminal in real time.
+`on_text_delta=lambda delta: print(...)` is the sink that turns each delta into a printed character — the concrete caller for the callback declared back on the abstract `Provider`. Anything the model says, preamble or final answer, now streams to the terminal in real time.
 
-The long-term `messages` history still keeps only the user prompt and the final assistant text. The intermediate scratchpad inside `agent_step` — every tool-call message, every observation — is discarded when `agent_step` returns, the same trade-off Chapter 6's "What carries between turns" section walked through. Chapter 8 reconsiders that by persisting the full scratchpad into `messages` and pairing the change with a size budget on tool-result observations, so the model can refer back to earlier tools across turns without runaway context growth.
+The long-term `messages` history still keeps only the user prompt and the final assistant text. The intermediate scratchpad inside `agent_step` — every tool-call message, every observation — is discarded when `agent_step` returns.
 
 ## A worked example
 
@@ -855,7 +843,7 @@ The current UTC time is **2026-05-11 16:27:53**, and the sentence "the quick bro
 you: ^D
 ```
 
-The trace makes the payoff concrete. The model emitted both tool calls in iteration 1 as two structured `tool_use` blocks, and the API delivered them already parsed — the hand-written parser, regular expressions, and system-prompt protocol negotiation of Chapter 6 are all gone. The loop got back a `Reply` whose `tool_calls` list held two fully-populated `ToolCall` objects, with ids, names, and JSON arguments already parsed into Python dicts. The single `for tc in reply.tool_calls` line dispatched both in one iteration. The bookkeeping the Chapter 6 design did by hand — and got wrong often enough that the exercises were dedicated to plugging the leaks — is here two attribute accesses on a dataclass.
+The trace makes the payoff concrete. The model emitted both tool calls in iteration 1 as two structured `tool_use` blocks, and the API delivered them already parsed. The loop got back a `Reply` whose `tool_calls` list held two fully-populated `ToolCall` objects, with ids, names, and JSON arguments already parsed into Python dicts. The single `for tc in reply.tool_calls` line dispatched both in one iteration. The bookkeeping the Chapter 6 design did by hand is here two attribute accesses on a dataclass.
 
 Now try a *two-turn* exchange where the second turn depends on the first:
 
@@ -888,7 +876,7 @@ Open [`nanobot/nanobot/providers/`](https://github.com/HKUDS/nanobot/tree/28f9bb
 
 A few production nuances are visible in those files but invisible from the toy:
 
-**Defensive message normalization.** `_convert_messages` also handles edge cases the toy ignores: image blocks (`_convert_image_block`), merging consecutive same-role messages while preserving `tool_use` boundaries (`_merge_consecutive` plus `_has_tool_use` — Anthropic rejects an unmatched `tool_use` / `tool_result` pair), and enforcing role alternation when injection messages get spliced mid-turn (`_enforce_role_alternation`, in `base.py`). Each guard is a production incident report turned into a few lines of code.
+**Defensive message normalization.** `_convert_messages` also handles edge cases the toy ignores: image blocks (`_convert_image_block`), merging consecutive same-role messages while preserving `tool_use` boundaries (`_merge_consecutive` plus `_has_tool_use` — Anthropic rejects an unmatched `tool_use` / `tool_result` pair), and enforcing role alternation when injection messages get spliced mid-turn (`_enforce_role_alternation`, in `base.py`). Each guard traces back to a real production failure.
 
 **Cross-provider id sanity.** [`openai_compat_provider.py::_normalize_tool_call_id`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/providers/openai_compat_provider.py#L367) hashes long tool-call ids down to a fixed 9-character form. OpenRouter, Azure OpenAI, and various gateway proxies sometimes lengthen or reformat tool-call ids in transit, and a few stricter providers reject ids that exceed an internal limit. Threading the original id through verbatim — which the toy does — is fine for direct Anthropic and OpenAI traffic, and breaks subtly when traffic is fronted by an aggregator.
 

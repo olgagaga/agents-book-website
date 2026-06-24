@@ -298,7 +298,7 @@ Anthropic's streaming API is event-based [1]. Instead of yielding plain text fra
 - `content_block_start` — fires once at the beginning of each new content block. For `tool_use` blocks, this is where the tool's `id` and `name` arrive (the arguments come later, as deltas). Text blocks need no setup at this event.
 - `content_block_delta` — fires for the streamed contents of an in-progress block. Two flavors of delta are relevant here: `text_delta` (a chunk of assistant text) and `input_json_delta` (a fragment of a tool's argument JSON).
 
-The other event types (`message_start`, `message_delta`, `content_block_stop`, `message_stop`, usage events) still flow past in the same loop and are silently ignored. Some of them become load-bearing later — Chapter 9 listens for stop reasons on `message_delta`, Chapter 8 reads usage data — and the pattern of iterating every event and acting only on the recognized ones keeps the loop forward-compatible with new ones the SDK might add.
+The other event types (`message_start`, `message_delta`, `content_block_stop`, `message_stop`, usage events) still flow past in the same loop and are silently ignored.
 
 The first step renames the function and adds the two new arguments — `tools` (the list of available tools) and `on_text_delta` (the streaming callback introduced on the abstract `Provider`) — and changes the return type from `Iterator[str]` to `Reply`:
 

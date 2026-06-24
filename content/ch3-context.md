@@ -44,7 +44,7 @@ The system prompt is just text that the model sees first, and which it has been 
 
 As a consequence, the system prompt is paid for every turn because the model has no memory between calls. 
 
-At the same time, the system prompt and the user message are not strictly separable in the model's mind. A user with sufficient cleverness can sometimes get the model to ignore or contradict the system prompt — this is _prompt injection_, named by Simon Willison in September 2022 [4] after researchers at Preamble had privately reported it to OpenAI a few months earlier [5]. The most public early demonstration came in February 2023, when Bing Chat was talked into revealing its confidential system prompt and internal codename "Sydney" [6]. Chapter 26 covers it properly, but for now the lesson is to keep credentials, internal URLs, and anything else load-bearing out of a system prompt.
+At the same time, the system prompt and the user message are not strictly separable in the model's mind. A user with sufficient cleverness can sometimes get the model to ignore or contradict the system prompt — this is _prompt injection_, named by Simon Willison in September 2022 [4] after researchers at Preamble had privately reported it to OpenAI a few months earlier [5]. The most public early demonstration came in February 2023, when Bing Chat was talked into revealing its confidential system prompt and internal codename "Sydney" [6]. Chapter 26 covers it properly, but for now the lesson is to keep credentials, internal URLs out of a system prompt.
 
 ## A first try: hardcoding the system prompt
 

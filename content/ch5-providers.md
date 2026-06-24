@@ -421,7 +421,7 @@ ANTHROPIC_API_KEY=bogus OPENAI_API_KEY=bogus GEMINI_API_KEY=bogus uv run main.py
 
 This is the only path that surfaces a user-facing error. Up to that point the abstraction has been silent.
 
-What this exercise does not verify is the mid-stream guard (`yielded_anything`). Reproducing that requires either a real network drop in the middle of a reply or a more elaborate fault-injection rig. Exercise 2 walks through the production-grade error handling, which is where the mid-stream behavior becomes load-bearing.
+What this exercise does not verify is the mid-stream guard (`yielded_anything`). Reproducing that requires either a real network drop in the middle of a reply or a more elaborate fault-injection rig. Exercise 2 walks through the production-grade error handling.
 
 ## A note on `litellm` and similar libraries
 

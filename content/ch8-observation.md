@@ -4,7 +4,7 @@ Chapter 7 finished with a working tool-call loop, streaming restored, and multi-
 
 By the end of this chapter, tool results pass through a size budget before reaching the model, and the long-term `messages` list keeps the full context of previous tool calls.
 
-## Observations are load-bearing
+## Observations consume a lot of context
 
 In the loop, the model's observation of the world is whatever string sits in the `content` field of a `{"role": "tool", ...}` message. Two things follow. First, the string has to clearly describe a tool output, whether it failed or was truncated. The model's plan for the next iteration depends on whether it thinks the previous step succeeded. Second, the string has a budget: every byte of it costs context-window space, both on the request that contains it and on every subsequent request in the same turn.
 

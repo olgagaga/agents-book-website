@@ -765,6 +765,20 @@ def chat(provider: Provider | None = None) -> None:
     # --- code below ---
 ```
 
+## The virtual tool-call pattern
+
+Every tool call handled so far names a real capability — `now`, `wordcount` — something the model wants done in the world, dispatched through `find_tool` to a `run` function that actually does it. The same channel can carry something else: an intent the harness itself needs to act on, expressed as a tool call with a real schema even though no external work happens. The model issues what looks like an ordinary tool call; the dispatch code recognises the name, treats the arguments as structured metadata rather than as inputs to `tool.run`, and handles the request itself before it ever reaches the `find_tool` branch above.
+
+A concrete example is a `wait_until(timestamp)` tool. The model wants to pause until a specific time before checking on something — "remind me in five minutes," "wait until 9am." Without a virtual tool, the model either says "I'll wait" in free text, which the harness then has to parse out of prose, or calls a real sleep-style tool with a computed delay and no structured way to say *why* it is waiting. A virtual tool lets the model express the intent in the same structured form every other tool call already uses:
+
+```json
+{"name": "wait_until", "args": {"timestamp": "2026-05-13T15:45:00Z", "reason": "user asked to be reminded"}}
+```
+
+The wire format is unchanged — the schema is declared in `tools` the same way `now`'s is, and the model fills `args` exactly like it would for any other call. What differs is entirely on the dispatch side: recognizing `wait_until` routes the call to a harness-internal handler instead of `tool.run`, which registers the wait, returns a synthetic observation such as `"wait registered: 4m 58s remaining"`, and fires a follow-up once the timestamp lands.
+
+The pattern turns a decision the harness has to make anyway — is it time yet, is there anything to check on — into the same typed, structured channel the model already uses for everything else, instead of a free-text answer the harness would have to parse back out. Chapter 10 puts this to work once tool calls run in the background and the loop needs a way for the model to register a wait without blocking on it.
+
 ## Wiring `chat()` with streaming
 
 Chapter 6 disabled streaming in `chat()` because the loop could not tell whether a reply was a tool call or a final answer until the whole reply had arrived — and a half-streamed JSON tool call printed live to the terminal would have been worse than no streaming at all. Native tool calls fix that at the wire-format layer: text and tool-use blocks are different events from the first byte, so text can stream the moment it arrives with no risk of accidentally streaming a JSON tool call by mistake:

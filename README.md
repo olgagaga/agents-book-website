@@ -1,6 +1,6 @@
 # AI Agent Engineering — book website
 
-A simple reading site for the first eight chapters of *AI Agent Engineering*,
+A simple reading site for the first ten chapters of *AI Agent Engineering*,
 built with Next.js (App Router) and deployed on Vercel.
 
 ## Local development

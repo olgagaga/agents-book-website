@@ -68,7 +68,7 @@ export default function Home() {
           ))}
         </ol>
         <p className="mt-8 text-sm" style={{ color: "var(--muted)" }}>
-          The first eight chapters are published here. More are on the way.
+          The first ten chapters are published here. More are on the way.
         </p>
       </section>
 

@@ -15,6 +15,8 @@ export const CHAPTERS = [
   { file: "ch6-loop.md", slug: "6-the-loop", title: "The Loop" },
   { file: "ch7-tools.md", slug: "7-tool-calling", title: "Tool Calling" },
   { file: "ch8-observation.md", slug: "8-observation-and-continuation", title: "Observation and Continuation" },
+  { file: "ch9-stopping.md", slug: "9-stopping-conditions", title: "Stopping Conditions" },
+  { file: "ch10-heartbeat.md", slug: "10-heartbeat-and-long-running-tasks", title: "Heartbeat & Long-Running Tasks" },
 ] as const;
 
 export type Chapter = (typeof CHAPTERS)[number];

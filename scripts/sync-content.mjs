@@ -22,6 +22,8 @@ const FILES = [
   "ch6-loop.md",
   "ch7-tools.md",
   "ch8-observation.md",
+  "ch9-stopping.md",
+  "ch10-heartbeat.md",
 ];
 
 if (!fs.existsSync(BOOK_DIR)) {

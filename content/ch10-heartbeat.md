@@ -422,11 +422,23 @@ assistant: Hi! (I already finished the sleep, but noted — I'll skip it next ti
 
 The model handled the conflict correctly. The sleep was already done by the time the note arrived, so there was nothing to skip, but the note still informed the reply ("noted — I'll skip it next time"). 
 
+## The virtual tool-call pattern
+
+The idea of a virtual tool-call pattern is to expose an intent that the agent harness needs to act on as a tool call with a real schema. The model issues what looks like a tool call; the loop recognises the name, treats the arguments as metadata, and acts on them itself. 
+
+A concrete example is a `wait_until(timestamp)` tool. The model wants to wait for a specific time before checking something — say, "remind me in five minutes" or "wait until 9am." Without a virtual tool, the model has to either say "I'll wait" in free text (which the harness then has to parse) or call a real `sleep_for` tool with a computed delta. With a virtual tool, the model expresses the intent in structured form:
+
+```json
+{"name": "wait_until", "args": {"timestamp": "2026-05-13T15:45:00Z", "reason": "user asked to be reminded"}}
+```
+
+The loop sees `wait_until`, recognises it as a virtual tool, and handles it specially: register the wait with the heartbeat, return a synthetic observation like `"wait registered: 4m 58s remaining"`, and on the iteration when the timestamp lands, fire a follow-up.
+
 ## Production reference
 
 Open [`nanobot/nanobot/heartbeat/service.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/heartbeat/service.py). The `HeartbeatService` class is a different beast from the chapter's `_heartbeat` function — it is a *periodic scheduler* that wakes the agent every `interval_s` (default 30 minutes) to check `HEARTBEAT.md` for tasks. The relevant production lessons are not in the scheduling but in two smaller details.
 
-[`_HEARTBEAT_TOOL`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/heartbeat/service.py#L14) near the top of the file is a textbook example of the virtual tool-call pattern from Chapter 7. Its schema (`action`: `skip` or `run`; `tasks`: a string summary) gives the model a structured way to answer "is there anything to do right now?" — without a virtual tool the answer would be free-text, the harness would have to parse it, and there would be a permanent risk of the model saying "yes" in a way the parser missed. The tool call removes the parsing problem entirely. The [`_decide`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/heartbeat/service.py#L87) method shows the round trip: prompt the model, read `response.tool_calls[0].arguments`, branch on the structured `action`. Adopting this for the chapter's own virtual tools — once they are added — is a small change: route the tool name to a harness-internal handler instead of `tool.run`.
+[`_HEARTBEAT_TOOL`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/heartbeat/service.py#L14) near the top of the file is a textbook virtual tool. Its schema (`action`: `skip` or `run`; `tasks`: a string summary) gives the model a structured way to answer "is there anything to do right now?" — without a virtual tool the answer would be free-text, the harness would have to parse it, and there would be a permanent risk of the model saying "yes" in a way the parser missed. The tool call removes the parsing problem entirely. The [`_decide`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/heartbeat/service.py#L87) method shows the round trip: prompt the model, read `response.tool_calls[0].arguments`, branch on the structured `action`. Adopting this for the chapter's own virtual tools — once they are added — is a small change: route the tool name to a harness-internal handler instead of `tool.run`.
 
 The closer cousin of the chapter's `_heartbeat` lives in [`nanobot/nanobot/agent/runner.py`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/runner.py). [`_try_drain_injections`](https://github.com/HKUDS/nanobot/blob/28f9bbff314cf90b0401b3aa220ca7a723c4f4ab/nanobot/agent/runner.py#L142) is what the production loop calls between iterations to pull user messages off an injection callback (the production analogue of the stdin queue here — it might come from a message bus, an HTTP endpoint, or a chat channel). Three details are worth pulling out.
 
